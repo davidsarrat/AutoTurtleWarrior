@@ -1,0 +1,42 @@
+## Interface: 12000
+## Title: Auto Turtle Warrior
+## Notes: TurtleWoW Fury Warrior rotation helper
+## Author: Sarrat
+## SavedVariables: AutoTurtleWarrior_Config
+
+# Core
+Core\Init.lua
+Core\Helpers.lua
+
+# Player
+Player\Stats.lua
+Player\TTD.lua
+Player\Gear.lua
+Player\Talents.lua
+
+# Combat
+Combat\Stance.lua
+Combat\Casting.lua
+Combat\SwingTimer.lua
+Combat\GUIDTargeting.lua
+
+# Detection
+Detection\Distance.lua
+Detection\CreatureType.lua
+Detection\AoE.lua
+
+# Simulation (load before Rotation)
+Sim\Abilities.lua
+Sim\RageModel.lua
+Sim\Engine.lua
+Sim\Simulator.lua
+
+# Rotation (uses Simulation)
+Rotation\Rotation.lua
+
+# UI
+UI\Display.lua
+
+# Commands
+Commands\SlashCommands.lua
+Commands\Events.lua

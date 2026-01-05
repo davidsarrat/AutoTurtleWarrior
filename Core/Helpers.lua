@@ -1,0 +1,229 @@
+--[[
+	Auto Turtle Warrior - Core/Helpers
+	Utility functions
+]]--
+
+---------------------------------------
+-- Print / Debug
+---------------------------------------
+function ATW.Print(msg)
+	DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[ATW]|r " .. msg)
+end
+
+function ATW.Debug(msg)
+	if AutoTurtleWarrior_Config.Debug then
+		ATW.Print(msg)
+	end
+end
+
+---------------------------------------
+-- Spell Helpers
+---------------------------------------
+function ATW.SpellID(name)
+	local id = 1
+	for t = 1, GetNumSpellTabs() do
+		local _, _, _, n = GetSpellTabInfo(t)
+		for s = 1, n do
+			if GetSpellName(id, BOOKTYPE_SPELL) == name then
+				return id
+			end
+			id = id + 1
+		end
+	end
+	return nil
+end
+
+function ATW.Ready(spell)
+	local id = ATW.SpellID(spell)
+	if not id then return nil end
+	local start, dur = GetSpellCooldown(id, 0)
+	return start == 0 and dur == 0
+end
+
+---------------------------------------
+-- Buff / Debuff Detection
+---------------------------------------
+function ATW.Buff(unit, texture)
+	local i = 1
+	while UnitBuff(unit, i) do
+		if strfind(UnitBuff(unit, i), texture) then
+			return true
+		end
+		i = i + 1
+	end
+	return false
+end
+
+function ATW.Debuff(unit, texture)
+	local i = 1
+	while UnitDebuff(unit, i) do
+		if strfind(UnitDebuff(unit, i), texture) then
+			return true
+		end
+		i = i + 1
+	end
+	return false
+end
+
+---------------------------------------
+-- Check if GUID has a debuff by texture
+-- SuperWoW: UnitDebuff accepts GUIDs directly!
+-- Priority 1: Direct UnitDebuff(guid, i) - most reliable
+-- Priority 2: RendTracker for Rend (combat log verified)
+---------------------------------------
+function ATW.DebuffOnGUID(guid, texture)
+	if not guid or guid == "" then return false end
+
+	-- Priority 1: Try direct UnitDebuff with GUID (SuperWoW feature)
+	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		local ok, found = pcall(function()
+			local i = 1
+			while true do
+				local debuffTexture = UnitDebuff(guid, i)
+				if not debuffTexture then break end
+				if strfind(debuffTexture, texture) then
+					return true
+				end
+				i = i + 1
+			end
+			return false
+		end)
+		if ok and found then
+			return true
+		end
+	end
+
+	-- Priority 2: For Rend, check our tracking system
+	-- (fallback in case UnitDebuff(guid) doesn't work)
+	if texture == "Ability_Gouge" and ATW.RendTracker then
+		if ATW.RendTracker.HasRend(guid) then
+			return true
+		end
+	end
+
+	-- Priority 3: Try checking via target if this GUID matches our target
+	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		local _, targetGUID = UnitExists("target")
+		if targetGUID and targetGUID == guid then
+			return ATW.Debuff("target", texture)
+		end
+	end
+
+	return false
+end
+
+---------------------------------------
+-- Check if unit/GUID has Rend specifically
+-- Priority: SuperWoW UnitDebuff > RendTracker
+-- This ensures we detect real debuffs even if tracking failed
+---------------------------------------
+function ATW.HasRend(unitOrGUID)
+	if not unitOrGUID then return false end
+
+	-- Check if it's a standard unit ID
+	if unitOrGUID == "target" or unitOrGUID == "player" or
+	   unitOrGUID == "focus" or unitOrGUID == "mouseover" then
+		-- Standard debuff check first (most reliable)
+		if ATW.Debuff(unitOrGUID, "Ability_Gouge") then
+			return true
+		end
+		-- Fallback to tracker for target
+		if unitOrGUID == "target" and ATW.HasSuperWoW and ATW.HasSuperWoW() then
+			local _, guid = UnitExists("target")
+			if guid and ATW.RendTracker and ATW.RendTracker.HasRend(guid) then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Assume it's a GUID
+	-- Priority 1: SuperWoW UnitDebuff(guid) - most reliable
+	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		local ok, hasDebuff = pcall(function()
+			return ATW.DebuffOnGUID(unitOrGUID, "Ability_Gouge")
+		end)
+		if ok and hasDebuff then
+			return true
+		end
+	end
+
+	-- Priority 2: RendTracker (fallback, may have slight delay)
+	if ATW.RendTracker then
+		return ATW.RendTracker.HasRend(unitOrGUID)
+	end
+
+	return false
+end
+
+---------------------------------------
+-- Get Rend remaining duration on GUID
+-- Returns: seconds remaining, or 0 if no Rend
+-- Note: SuperWoW UnitDebuff doesn't return duration, so we use tracking
+---------------------------------------
+function ATW.GetRendRemaining(guid)
+	if not guid then return 0 end
+
+	-- Use tracking system (duration comes from our own tracking)
+	if ATW.RendTracker then
+		return ATW.RendTracker.GetRendRemaining(guid)
+	end
+
+	return 0
+end
+
+---------------------------------------
+-- Health Helpers
+-- TurtleWoW/SuperWoW can return inconsistent values:
+-- Sometimes UnitHealth returns percentage but UnitHealthMax returns real HP
+-- We need to detect and handle this
+---------------------------------------
+function ATW.GetHealthPercent(unit)
+	unit = unit or "player"
+
+	local hp = UnitHealth(unit)
+	local max = UnitHealthMax(unit)
+
+	-- Safety check
+	if not hp or not max or max == 0 then
+		return 100
+	end
+
+	-- For player: always real values
+	if unit == "player" then
+		return (hp / max) * 100
+	end
+
+	-- For non-player units, detect the format:
+	-- Case 1: Both are percentages (vanilla style) - max is around 100
+	-- Case 2: Both are real values - max is much larger than 100
+	-- Case 3: hp is percentage (0-100) but max is real - BROKEN, need to detect
+
+	-- If hp > max, something is wrong - hp might be percentage, max might be real
+	-- This happens when hp=75 (%) and max=50 (real low-hp mob)
+	-- But also could be hp=7500 (real) and max=100 (broken)
+
+	-- Simple heuristic: if max <= 100, assume vanilla percentage mode
+	if max <= 100 then
+		-- hp should be in range 0-100 (percentage)
+		-- Just return hp as the percentage
+		return hp
+	end
+
+	-- max > 100, so it's likely real HP values
+	-- Check if hp looks like a percentage (0-100) or real value
+	if hp <= 100 and max > 1000 then
+		-- hp looks like percentage but max is real - BROKEN
+		-- Just return hp as percentage directly
+		return hp
+	end
+
+	-- Both seem to be real values
+	return (hp / max) * 100
+end
+
+function ATW.InExecutePhase(unit)
+	unit = unit or "target"
+	if not UnitExists(unit) then return false end
+	return ATW.GetHealthPercent(unit) < 20
+end
