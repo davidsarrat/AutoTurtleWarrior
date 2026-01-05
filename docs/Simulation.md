@@ -8,7 +8,7 @@ The addon uses a **pure simulation approach** to determine the optimal ability a
 
 1. **Capture State**: Snapshot current combat state (all enemies, Rend status, cooldowns, combat state)
 2. **Generate Actions**: List all valid actions from current state (only learned spells!)
-3. **Simulate Each**: For each action, simulate 6 seconds of combat
+3. **Simulate Each**: For each action, simulate 60 seconds (1 minute) of combat
 4. **Compare Damage**: Pick the action that yields highest total damage
 
 This is the same approach used by the [Zebouski WarriorSim](https://zebouski.github.io/WarriorSim-TurtleWoW/).
@@ -264,7 +264,7 @@ end
 
 ### 5. SimulateDecisionHorizon(state, firstAction, horizon)
 
-Simulates 6 seconds (4 GCDs) forward starting with `firstAction`:
+Simulates 60 seconds (1 minute) forward starting with `firstAction`:
 
 ```lua
 function SimulateDecisionHorizon(state, firstAction, horizon)
@@ -300,7 +300,7 @@ function GetBestAction()
     local bestAction, bestDamage = nil, -1
 
     for _, action in ipairs(actions) do
-        local damage = SimulateDecisionHorizon(state, action, 6000)
+        local damage = SimulateDecisionHorizon(state, action, 60000)
         if damage > bestDamage then
             bestDamage = damage
             bestAction = action
@@ -373,8 +373,8 @@ end
 ```
 
 The simulation naturally handles the "save rage for BT" decision:
-- **Scenario A**: Use HS now → simulate 6s → total damage X
-- **Scenario B**: Wait → use BT → simulate 6s → total damage Y
+- **Scenario A**: Use HS now → simulate 60s → total damage X
+- **Scenario B**: Wait → use BT → simulate 60s → total damage Y
 - Pick whichever yields more damage
 
 This is the **Zebouski approach**: no arbitrary rules, just damage comparison.
@@ -452,7 +452,7 @@ The simulation **naturally handles all edge cases** because it calculates actual
 
 ```
 === Decision Simulator ===
-Horizon: 6s
+Horizon: 60s
 
 Action comparison:
   Bloodthirst: 4850 dmg << BEST
@@ -486,4 +486,4 @@ AutoTurtleWarrior_Config = {
 }
 ```
 
-Note: HS/Cleave have **no rage threshold** - the simulation determines optimal usage by comparing damage scenarios over the 6-second horizon.
+Note: HS/Cleave have **no rage threshold** - the simulation determines optimal usage by comparing damage scenarios over the 60-second horizon.

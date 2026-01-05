@@ -36,7 +36,7 @@ The addon uses a **100% simulation-based approach** (Zebouski-style) with **no h
 
 1. **Capture State** - Snapshot full combat state (all enemies, buffs, cooldowns, combat state)
 2. **Generate Actions** - List all valid actions using `hasSpell()` checks (only learned spells!)
-3. **Simulate Each** - For each action, simulate 6 seconds (4 GCDs) of combat
+3. **Simulate Each** - For each action, simulate 60 seconds (1 minute) of combat
 4. **Compare Damage** - Pick the action that yields highest total damage
 
 This approach automatically handles edge cases like:
@@ -124,7 +124,7 @@ GetBestAction()
     └── CaptureCurrentState()      -- Get full combat snapshot
             └── GetValidActions()  -- List valid actions (hasSpell checks!)
                     └── For each action:
-                            SimulateDecisionHorizon()  -- Simulate 6s
+                            SimulateDecisionHorizon()  -- Simulate 60s
                                     └── Compare total damage
                                             └── Return highest
 ```

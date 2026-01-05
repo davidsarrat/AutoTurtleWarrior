@@ -365,7 +365,9 @@ Abilities.Hamstring = {
 		return 45  -- Rank 3
 	end,
 	condition = function(state)
-		return true
+		-- Disabled for DPS rotation - Hamstring is a PvP utility (slow)
+		-- Not part of the simulation-based decision system
+		return false
 	end,
 }
 

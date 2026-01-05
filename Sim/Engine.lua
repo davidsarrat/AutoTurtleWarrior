@@ -1227,77 +1227,33 @@ function Engine.CheckTrinketProcs(state, isMH)
 end
 
 ---------------------------------------
--- Choose best ability to use
+-- Choose best ability to use (greedy by immediate damage)
+-- NO HARDCODED PRIORITIES - uses same GetValidActions + GetActionDamage
+-- as the main decision system
 ---------------------------------------
 function Engine.ChooseAbility(state)
-	local inExecute = Engine.AnyTargetInExecute(state)
-	local aliveTargets = Engine.CountAliveTargets(state)
+	-- Get all valid actions using the standard function
+	local actions = Engine.GetValidActions(state)
 
-	-- Check Overpower window urgency (boost priority if expiring)
-	local overpowerUrgent = false
-	if state.overpowerReady and state.overpowerEnd then
-		local windowRemaining = (state.overpowerEnd - state.time) / 1000
-		if windowRemaining > 0 and windowRemaining <= 2 then
-			overpowerUrgent = true
+	if not actions or table.getn(actions) == 0 then
+		return nil, false
+	end
+
+	-- Find the action with highest immediate damage
+	local bestAction = nil
+	local bestDamage = -1
+
+	for _, action in ipairs(actions) do
+		local damage = Engine.GetActionDamage(state, action)
+
+		if damage > bestDamage then
+			bestDamage = damage
+			bestAction = action
 		end
 	end
 
-	-- Priority list (dynamic based on Overpower urgency)
-	local priorities = {
-		-- Off-GCD abilities first
-		{name = "Bloodrage", offGCD = true, condition = function()
-			return state.rage < 50 and (state.health or 100) >= 50
-		end},
-		{name = "BerserkerRage", offGCD = true, condition = function()
-			return state.stance == 3 and ATW.Talents and ATW.Talents.HasIBR
-		end},
-		{name = "DeathWish", offGCD = true, condition = function()
-			return ATW.Talents and ATW.Talents.HasDW
-		end},
-		{name = "Recklessness", offGCD = true, condition = function()
-			return state.stance == 3
-		end},
-
-		-- Execute phase
-		{name = "Execute", condition = function() return inExecute end},
-
-		-- URGENT Overpower (window about to expire) - before core rotation
-		{name = "Overpower", condition = function()
-			return overpowerUrgent and state.overpowerReady
-		end},
-
-		-- Core rotation
-		{name = "Bloodthirst"},
-		{name = "MortalStrike", condition = function()
-			return ATW.Talents and ATW.Talents.HasMS and not ATW.Talents.HasBT
-		end},
-		{name = "Whirlwind"},
-
-		-- Normal Overpower (window not urgent)
-		{name = "Overpower", condition = function()
-			return not overpowerUrgent and state.overpowerReady
-		end},
-
-		-- Rage dumps
-		{name = "Cleave", condition = function()
-			return aliveTargets >= 2 and state.rage >= 60
-		end},
-		{name = "HeroicStrike", condition = function()
-			return state.rage >= 70 and not state.swingQueued
-		end},
-	}
-
-	for _, prio in ipairs(priorities) do
-		-- Check custom condition (skip if condition returns false)
-		local conditionMet = true
-		if prio.condition then
-			conditionMet = prio.condition()
-		end
-
-		-- Check if ability can be used
-		if conditionMet and Engine.CanUseAbility(state, prio.name) then
-			return prio.name, prio.offGCD
-		end
+	if bestAction and bestAction.name ~= "Wait" then
+		return bestAction.name, bestAction.offGCD or false
 	end
 
 	return nil, false
@@ -1453,34 +1409,6 @@ function Engine.ShouldCancelSwing(state)
 end
 
 ---------------------------------------
--- Should pool rage for Execute?
----------------------------------------
-function Engine.ShouldPoolForExecute(state)
-	-- Find closest target to execute phase
-	local closestToExecute = nil
-	local minTimeToExecute = 999999
-
-	for id, target in pairs(state.targets) do
-		if target.hp > Engine.EXECUTE_THRESHOLD then
-			-- Time until this target hits 20% HP
-			local hpToLose = target.hp - Engine.EXECUTE_THRESHOLD
-			local timeToExecute = hpToLose / target.hpDecayRate
-			if timeToExecute < minTimeToExecute then
-				minTimeToExecute = timeToExecute
-				closestToExecute = target
-			end
-		end
-	end
-
-	-- Pool rage if execute phase coming within 5 seconds
-	if minTimeToExecute < 5000 and state.rage < 80 then
-		return true, minTimeToExecute
-	end
-
-	return false, 0
-end
-
----------------------------------------
 -- Main simulation loop
 ---------------------------------------
 function Engine.Simulate(duration, strategy)
@@ -1545,31 +1473,17 @@ function Engine.Simulate(duration, strategy)
 			state.ohTimer = state.ohSpeed / haste
 		end
 
-		-- Check for execute rage pooling
-		local shouldPool, timeToExecute = Engine.ShouldPoolForExecute(state)
-
 		-- Check if we should cancel HS/Cleave
 		local shouldCancel, cancelReason = Engine.ShouldCancelSwing(state)
 		if shouldCancel then
 			Engine.CancelSwingQueue(state)
 		end
 
-		-- Choose and use ability
+		-- Choose and use ability (greedy by immediate damage - no hardcoded pooling)
 		local abilityName, isOffGCD = Engine.ChooseAbility(state)
 
 		if abilityName then
-			-- Skip low-priority abilities when pooling for execute
-			if shouldPool and state.rage < 90 then
-				-- Only use high-priority abilities
-				if abilityName ~= "Bloodthirst" and abilityName ~= "Whirlwind" and
-				   abilityName ~= "Execute" and abilityName ~= "Bloodrage" then
-					abilityName = nil
-				end
-			end
-
-			if abilityName then
-				Engine.UseAbility(state, abilityName)
-			end
+			Engine.UseAbility(state, abilityName)
 		end
 
 		-- Expire buffs
@@ -1708,7 +1622,7 @@ end
 ---------------------------------------
 
 -- Configuration
-Engine.DECISION_HORIZON = 6000   -- 6 seconds (4 GCDs)
+Engine.DECISION_HORIZON = 60000  -- 60 seconds (1 minute lookahead)
 Engine.DECISION_GCD = 1500       -- 1.5s GCD
 
 ---------------------------------------
@@ -2218,13 +2132,24 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- Slam (any stance, 15 rage, resets swing timer)
-	-- Good filler when BT/WW on CD - ONLY with 2H weapon (no offhand)
+	-- ONLY with 2H weapon (no offhand)
+	-- CRITICAL: Only use right after auto-attack (swing timer near full)
+	-- Using Slam mid-swing wastes swing progress (Zebouski approach)
 	---------------------------------------
 	if hasSpell("Slam") and not state.hasOH then
 		local slamCost = 15
 		local slamReady = (state.cooldowns.Slam or 0) <= 0
 		if slamReady and rage >= slamCost then
-			table.insert(actions, {name = "Slam", stance = stance, rage = slamCost, needsDance = false})
+			-- Check swing timer - only Slam if we just landed an auto-attack
+			-- mhTimer is time REMAINING, mhSpeed is full swing duration
+			-- Slam is optimal when mhTimer >= mhSpeed * 0.9 (just after swing)
+			local mhTimer = state.mhTimer or 0
+			local mhSpeed = state.mhSpeed or 2500
+			local swingJustLanded = mhTimer >= (mhSpeed * 0.85)  -- Within 15% of full timer
+
+			if swingJustLanded then
+				table.insert(actions, {name = "Slam", stance = stance, rage = slamCost, needsDance = false})
+			end
 		end
 	end
 
@@ -2258,15 +2183,12 @@ function Engine.GetValidActions(state)
 	---------------------------------------
 	-- Bloodrage (any stance, OFF-GCD, generates rage)
 	-- Critical for rage generation at pull and during combat
+	-- NO HP threshold - simulation decides optimal usage
 	---------------------------------------
 	if hasSpell("Bloodrage") then
 		local bloodrageReady = (state.cooldowns.Bloodrage or 0) <= 0
 		if bloodrageReady and not state.hasBloodrageActive then
-			-- Only use if HP is decent (Bloodrage costs HP)
-			local playerHP = ATW.GetHealthPercent and ATW.GetHealthPercent() or 100
-			if playerHP >= 50 then
-				table.insert(actions, {name = "Bloodrage", stance = stance, rage = 0, needsDance = false, offGCD = true})
-			end
+			table.insert(actions, {name = "Bloodrage", stance = stance, rage = 0, needsDance = false, offGCD = true})
 		end
 	end
 

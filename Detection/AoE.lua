@@ -176,10 +176,16 @@ function ATW.ParseRendCombatLog(msg)
 	if resistedTarget or immuneTarget then
 		local failedTarget = resistedTarget or immuneTarget
 
-		-- Only clear pending if the failed target matches our pending name
-		-- This handles the edge case where we cast on mob A, it fails,
-		-- but we already cast on mob B before seeing the failure
+		-- Remove tracking if the failed target matches our pending name
+		-- Since we now track immediately on cast, we need to REMOVE on failure
 		if ATW.State and ATW.State.PendingRendName == failedTarget then
+			-- CRITICAL: Remove from tracker (we added optimistically on cast)
+			if ATW.State.PendingRendGUID and ATW.RendTracker then
+				ATW.RendTracker.targets[ATW.State.PendingRendGUID] = nil
+				if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+					ATW.Debug("RendTracker: REMOVED (failed) guid=" .. ATW.State.PendingRendGUID)
+				end
+			end
 			ATW.State.PendingRendGUID = nil
 			ATW.State.PendingRendTime = nil
 			ATW.State.PendingRendName = nil

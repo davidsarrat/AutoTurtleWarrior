@@ -455,25 +455,50 @@ function ATW.UpdateDisplay()
 	-- Check for valid target
 	local hasTarget = UnitExists("target") and not UnitIsDead("target") and UnitCanAttack("player", "target")
 
+	-- Even without target, check for self-buffs (Battle Shout, Bloodrage, etc.)
 	if not hasTarget then
-		-- No target state
-		elements.icon.icon:SetTexture("Interface\\Icons\\Ability_Warrior_BattleShout")
-		elements.icon.icon:SetVertexColor(0.4, 0.4, 0.4, 1)
-		elements.icon.border:SetVertexColor(0.4, 0.4, 0.4, 0.5)
-		elements.icon.cooldown:Hide()
-		elements.abilityName:SetText("No Target")
-		elements.abilityName:SetTextColor(colors.textGray[1], colors.textGray[2], colors.textGray[3], 1)
-		elements.reasonText:SetText("Select an enemy to attack")
-		elements.stateBadge:SetText("")
-		elements.statusLine:SetText("")
-		elements.targetLine:SetText("")
-		elements.queueLine:SetText("")
+		-- Check if Battle Shout is needed (doesn't require target!)
+		local needsBattleShout = not ATW.Buff("player", "Ability_Warrior_BattleShout")
+		local rage = UnitMana("player") or 0
 
-		-- Update bars to empty
+		if needsBattleShout and rage >= 10 then
+			-- Recommend Battle Shout
+			local texture = nil
+			local spellId = ATW.SpellID and ATW.SpellID("Battle Shout")
+			if spellId then
+				texture = GetSpellTexture(spellId, BOOKTYPE_SPELL)
+			end
+			elements.icon.icon:SetTexture(texture or "Interface\\Icons\\Ability_Warrior_BattleShout")
+			elements.icon.icon:SetVertexColor(1, 1, 1, 1)
+			elements.icon.border:SetVertexColor(1, 1, 1, 0.8)
+			elements.icon.cooldown:Hide()
+			elements.abilityName:SetText("Battle Shout")
+			elements.abilityName:SetTextColor(1, 1, 1, 1)
+			elements.reasonText:SetText("Buff missing (no target needed)")
+			elements.stateBadge:SetText("")
+			elements.statusLine:SetText("")
+			elements.targetLine:SetText("")
+			elements.queueLine:SetText("")
+		else
+			-- No target and no buffs needed
+			elements.icon.icon:SetTexture("Interface\\Icons\\Ability_Warrior_BattleShout")
+			elements.icon.icon:SetVertexColor(0.4, 0.4, 0.4, 1)
+			elements.icon.border:SetVertexColor(0.4, 0.4, 0.4, 0.5)
+			elements.icon.cooldown:Hide()
+			elements.abilityName:SetText("No Target")
+			elements.abilityName:SetTextColor(colors.textGray[1], colors.textGray[2], colors.textGray[3], 1)
+			elements.reasonText:SetText("Select an enemy to attack")
+			elements.stateBadge:SetText("")
+			elements.statusLine:SetText("")
+			elements.targetLine:SetText("")
+			elements.queueLine:SetText("")
+		end
+
+		-- Update bars
 		elements.swingBar:SetValue(0, 1, colors.swing)
 		elements.swingBar.text:SetText("")
-		elements.rageBar:SetValue(UnitMana("player") or 0, 100, colors.rage)
-		elements.rageBar.text:SetText(string.format("%d", UnitMana("player") or 0))
+		elements.rageBar:SetValue(rage, 100, colors.rage)
+		elements.rageBar.text:SetText(string.format("%d", rage))
 		return
 	end
 

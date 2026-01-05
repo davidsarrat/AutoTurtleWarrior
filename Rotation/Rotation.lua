@@ -10,12 +10,30 @@ function ATW.Rotation()
 	-- Basic checks
 	if not cfg.Enabled then return end
 	if UnitClass("player") ~= "Warrior" then return end
-	if not UnitExists("target") or UnitIsDead("target") then return end
-	if not UnitCanAttack("player", "target") then return end
+
+	local rage = UnitMana("player")
+
+	---------------------------------------
+	-- Self-buffs that don't need a target (Battle Shout, etc.)
+	-- Check BEFORE target requirement
+	---------------------------------------
+	local hasTarget = UnitExists("target") and not UnitIsDead("target") and UnitCanAttack("player", "target")
+
+	if not hasTarget then
+		-- No target - only allow self-buffs
+		if not ATW.Buff("player", "Ability_Warrior_BattleShout") and rage >= 10 and ATW.Ready("Battle Shout") then
+			ATW.CastSelf("Battle Shout")
+			ATW.Debug("Battle Shout (no target)")
+			return
+		end
+		-- No target and no buffs to cast
+		return
+	end
+
+	-- From here on, we have a valid target
 
 	-- Combat state
 	local st = ATW.Stance()
-	local rage = UnitMana("player")
 
 	-- Check for Charge BEFORE starting auto-attack (Charge requires out of combat)
 	-- Only if not in combat and target is in Charge range (8-25 yards)
@@ -128,28 +146,31 @@ function ATW.Rotation()
 		end
 
 	-- GUID-based Rend (for spreading to specific targets)
-	-- NOTE: We do NOT track Rend here immediately because:
-	-- 1. The cast might be resisted/immune
-	-- 2. Combat log parsing will confirm when Rend actually ticks
-	-- 3. ATW.HasRend() uses SuperWoW UnitDebuff as primary check
+	-- Track Rend IMMEDIATELY on cast (optimistically) to prevent re-casting
+	-- Combat log will REMOVE tracking if resist/immune, or REFRESH if tick confirms
 	elseif abilityName == "Rend" then
 		if targetGUID and ATW.Engine and ATW.Engine.CastRendOnGUID then
 			-- Use GUID targeting to Rend specific mob
-			-- Store pending target WITH NAME for combat log verification
-			-- This handles multiple mobs with same name correctly
+			ATW.Engine.CastRendOnGUID(targetGUID)
+			-- Track IMMEDIATELY (optimistically) - prevents re-casting before confirmation
+			if ATW.RendTracker then
+				ATW.RendTracker.OnRendApplied(targetGUID)
+			end
+			-- Store pending for combat log verification (in case of resist/immune)
 			ATW.State.PendingRendGUID = targetGUID
 			ATW.State.PendingRendTime = GetTime()
-			-- Get name via SuperWoW for exact matching
 			local ok, name = pcall(function() return UnitName(targetGUID) end)
 			ATW.State.PendingRendName = ok and name or nil
-			ATW.Engine.CastRendOnGUID(targetGUID)
 		else
 			-- Fallback: cast on current target
 			ATW.Cast(ability.name, true)
-			-- Store pending target WITH NAME for combat log verification
+			-- Track IMMEDIATELY on current target
 			if ATW.HasSuperWoW and ATW.HasSuperWoW() then
 				local _, guid = UnitExists("target")
 				if guid then
+					if ATW.RendTracker then
+						ATW.RendTracker.OnRendApplied(guid)
+					end
 					ATW.State.PendingRendGUID = guid
 					ATW.State.PendingRendTime = GetTime()
 					ATW.State.PendingRendName = UnitName("target")
