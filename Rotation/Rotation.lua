@@ -17,9 +17,24 @@ function ATW.Rotation()
 	local st = ATW.Stance()
 	local rage = UnitMana("player")
 
-	-- Auto attack
-	if not state.Attacking then
-		AttackTarget()
+	-- Check for Charge BEFORE starting auto-attack (Charge requires out of combat)
+	-- Only if not in combat and target is in Charge range (8-25 yards)
+	if not UnitAffectingCombat("player") then
+		local dist = ATW.GetDistance and ATW.GetDistance("target") or nil
+		if dist and dist >= 8 and dist <= 25 and ATW.Ready("Charge") then
+			-- Charge available! Don't auto-attack yet, let simulator recommend Charge
+			ATW.Debug("Charge range: " .. string.format("%.1f", dist) .. "yd")
+		else
+			-- Not in Charge range or Charge not ready, start auto-attack
+			if not state.Attacking then
+				AttackTarget()
+			end
+		end
+	else
+		-- Already in combat, just auto-attack
+		if not state.Attacking then
+			AttackTarget()
+		end
 	end
 
 	-- Clear expired states
@@ -144,7 +159,14 @@ function ATW.Rotation()
 		state.Dancing = true
 
 	elseif abilityName == "Charge" then
-		ATW.Cast(ability.name, true)
+		-- Verify distance (8-25 yards) and out of combat before executing
+		local dist = ATW.GetDistance and ATW.GetDistance("target") or nil
+		if dist and dist >= 8 and dist <= 25 and not UnitAffectingCombat("player") then
+			ATW.Cast(ability.name, true)
+		else
+			ATW.Debug("Charge: not in range or in combat")
+			return
+		end
 	elseif abilityName == "SweepingStrikes" then
 		ATW.Cast(ability.name)
 		state.Dancing = true
@@ -159,6 +181,9 @@ function ATW.Rotation()
 		-- Swing queue ability
 		ATW.Cast(ability.name, true)
 		ATW.OnSwingAbilityQueued(ability.name)
+	elseif abilityName == "Slam" then
+		-- Slam has cast time, use standard cast
+		ATW.Cast(ability.name, true)
 	else
 		-- Standard targeted ability
 		ATW.Cast(ability.name, true)

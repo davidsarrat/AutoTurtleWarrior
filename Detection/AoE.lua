@@ -415,7 +415,7 @@ function ATW.ShouldSpreadRend()
 			end
 
 			-- Use HP-based rule: >= 30% HP is worth Rending
-			-- (matches Engine.REND_MIN_HP threshold)
+			-- (simulation-based: 30% HP = ~9s TTD = 3 Rend ticks minimum)
 			if hpPercent >= 30 then
 				worthyTargets = worthyTargets + 1
 			end

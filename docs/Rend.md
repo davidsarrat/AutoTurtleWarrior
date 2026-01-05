@@ -258,27 +258,33 @@ function ATW.ShouldSpreadRend()
 end
 ```
 
-### Multi-Target Rend in Engine
+### Multi-Target Rend in Engine (Simulation-Based)
 
-The Engine finds the best target for Rend:
+The Engine generates ONE Rend action per enemy and picks the best via simulation.
+
+**Important**: All abilities are wrapped in `hasSpell()` checks to verify they're learned:
 
 ```lua
-function Engine.FindBestRendTarget(state)
-    local enemies = ATW.GetEnemiesWithTTD(5)
-
-    for _, enemy in ipairs(enemies) do
-        local shouldRend = Engine.ShouldApplyRendToGUID(
-            enemy.guid,
-            enemy.hpPercent,
-            enemy.ttd
-        )
-        if shouldRend then
-            return enemy.guid
+-- In GetValidActions(), Rend is generated for EACH enemy needing it:
+if hasSpell("Rend") then  -- Only if Rend is learned!
+    for _, enemy in ipairs(state.enemies) do
+        if not enemy.bleedImmune and not enemy.inExecute then
+            if not enemy.hasRend or enemy.rendRemaining < 3000 then
+                if enemy.hpPercent >= 30 and enemy.ttd >= 9000 then
+                    table.insert(actions, {
+                        name = "Rend",
+                        targetGUID = enemy.guid,
+                        targetTTD = enemy.ttd,
+                        -- ... rage/stance info
+                    })
+                end
+            end
         end
     end
-
-    return nil
 end
+
+-- GetBestAction() simulates each and picks highest damage
+-- The Rend with the best target-specific damage wins
 ```
 
 ## Debug Commands

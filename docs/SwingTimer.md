@@ -291,38 +291,42 @@ end
 
 ## HS/Cleave Decision Making
 
-### Rage Thresholds
+### Pure Simulation - No Thresholds
+
+The addon uses **100% simulation-based** decisions with **no hardcoded rage thresholds**:
 
 ```lua
--- Default config
-AutoTurtleWarrior_Config.HSRage = 50  -- Only HS when rage > 50
-```
-
-### Decision Logic
-
-```lua
-function ATW.ShouldUseHeroicStrike()
-    local rage = UnitMana("player")
-    local threshold = AutoTurtleWarrior_Config.HSRage
-
-    -- Check rage threshold
-    if rage < threshold then
-        return false
+-- In GetValidActions() - simple check only
+if hasSpell("HeroicStrike") then
+    local hsCost = ATW.GetHeroicStrikeCost() or 15
+    -- Only check: have rage AND not already queued
+    if rage >= hsCost and not state.swingQueued then
+        table.insert(actions, {name = "HeroicStrike", offGCD = true, ...})
     end
-
-    -- Don't HS if BT/WW coming off CD soon
-    if ATW.Talents.HasBT then
-        local btReady = ATW.Ready("Bloodthirst")
-        if btReady then return false end
-    end
-
-    local wwReady = ATW.Ready("Whirlwind")
-    if wwReady then return false end
-
-    -- Safe to HS
-    return true
 end
 ```
+
+The simulation naturally handles rage management:
+- Evaluates "use HS now" vs "save rage for BT coming off CD"
+- The 6-second lookahead calculates total damage for each scenario
+- Picks the action that yields highest damage over the horizon
+
+### Why No Threshold?
+
+Old approach: "Don't HS if rage < 50 and BT is ready" - arbitrary rule
+
+New approach: Simulation compares:
+- **Scenario A**: Use HS now (15 rage) + use BT when off CD + auto-attacks
+- **Scenario B**: Wait + use BT now + auto-attacks + HS later
+
+The simulation picks whichever scenario produces more total damage. No need for hardcoded thresholds.
+
+### Off-GCD Handling
+
+HS/Cleave are marked `offGCD = true`:
+- They don't consume GCD time in simulation
+- Simulation continues evaluating abilities after HS
+- User can queue HS immediately when suggested - no timing pressure
 
 ## Debug Command
 

@@ -85,35 +85,39 @@ function ATW.HandleCommand(msg)
 		ATW.PrintStats()
 
 	elseif cmd == "spells" then
-		-- Show detected spell ranks
-		ATW.Print("--- Spell Ranks ---")
+		-- Show ALL detected spell ranks (what simulator can use)
+		ATW.Print("--- Spells for Simulator ---")
 		if ATW.Spells then
-			-- Rend (with detailed info)
-			if ATW.Spells.HasRend then
-				local rendDmg = ATW.GetRendDamage and ATW.GetRendDamage() or 0
-				local rendDur = ATW.GetRendDuration and ATW.GetRendDuration() or 0
-				local rendTicks = ATW.GetRendTicks and ATW.GetRendTicks() or 0
-				local impRend = ATW.Talents and ATW.Talents.ImpRend or 0
-				ATW.Print("Rend: Rank " .. ATW.Spells.RendRank ..
-					" | " .. string.format("%.0f", rendDmg) .. " dmg / " .. rendDur .. "s (" .. rendTicks .. " ticks)")
-				if impRend > 0 then
-					ATW.Print("  Improved Rend: +" .. (impRend * 10) .. "% damage")
-				end
-			else
-				ATW.Print("Rend: |cffff0000NOT LEARNED|r")
+			local function showSpell(name, rankKey, learnedText)
+				local rank = ATW.Spells[rankKey] or 0
+				local status = rank > 0 and ("|cFF00FF00R" .. rank .. "|r") or "|cFFFF0000NOT LEARNED|r"
+				ATW.Print("  " .. name .. ": " .. status .. (learnedText or ""))
 			end
 
-			-- Other spells
-			ATW.Print("Execute: Rank " .. (ATW.Spells.ExecuteRank or 0))
-			ATW.Print("Whirlwind: Rank " .. (ATW.Spells.WhirlwindRank or 0))
-			ATW.Print("Heroic Strike: Rank " .. (ATW.Spells.HeroicStrikeRank or 0))
-			ATW.Print("Battle Shout: Rank " .. (ATW.Spells.BattleShoutRank or 0))
-			if ATW.Spells.BloodthirstRank > 0 then
-				ATW.Print("Bloodthirst: Rank " .. ATW.Spells.BloodthirstRank)
-			end
-			if ATW.Spells.MortalStrikeRank > 0 then
-				ATW.Print("Mortal Strike: Rank " .. ATW.Spells.MortalStrikeRank)
-			end
+			ATW.Print("|cFFFFFF00Combat Abilities:|r")
+			showSpell("Execute", "ExecuteRank")
+			showSpell("Heroic Strike", "HeroicStrikeRank")
+			showSpell("Cleave", "CleaveRank")
+			showSpell("Overpower", "OverpowerRank")
+			showSpell("Rend", "RendRank")
+			showSpell("Whirlwind", "WhirlwindRank")
+			showSpell("Slam", "SlamRank")
+
+			ATW.Print("|cFFFFFF00Talent Abilities:|r")
+			showSpell("Bloodthirst", "BloodthirstRank")
+			showSpell("Mortal Strike", "MortalStrikeRank")
+			showSpell("Sweeping Strikes", "SweepingStrikesRank")
+			showSpell("Death Wish", "DeathWishRank")
+
+			ATW.Print("|cFFFFFF00Utility:|r")
+			showSpell("Battle Shout", "BattleShoutRank")
+			showSpell("Charge", "ChargeRank")
+			showSpell("Bloodrage", "BloodrageRank")
+			showSpell("Berserker Rage", "BerserkerRageRank")
+			showSpell("Pummel", "PummelRank")
+			showSpell("Recklessness", "RecklessnessRank")
+
+			ATW.Print("|cFFAAAAAASim will ONLY use learned spells!|r")
 		else
 			ATW.Print("Spells not loaded (use /reload)")
 		end
@@ -167,9 +171,9 @@ function ATW.HandleCommand(msg)
 		end
 
 	elseif cmd == "rend" then
-		-- Show Rend decision (rule-based, not simulation)
-		if ATW.Engine and ATW.Engine.PrintRendDecision then
-			ATW.Engine.PrintRendDecision()
+		-- Show Rend status via decision simulator
+		if ATW.Engine and ATW.Engine.PrintDecisionDebug then
+			ATW.Engine.PrintDecisionDebug()
 		else
 			ATW.Print("Engine not loaded")
 		end
@@ -411,6 +415,59 @@ function ATW.HandleCommand(msg)
 			ATW.PrintCreatureTypeCache()
 		end
 
+	elseif cmd == "op" or cmd == "overpower" then
+		-- Debug Overpower status
+		ATW.Print("--- Overpower Debug ---")
+
+		local state = ATW.State or {}
+
+		if state.Overpower then
+			local windowRemaining = 4 - (GetTime() - state.Overpower)
+			if windowRemaining > 0 then
+				ATW.Print("Status: |cff00ff00AVAILABLE|r")
+				ATW.Print("Window: " .. string.format("%.1f", windowRemaining) .. "s remaining")
+			else
+				ATW.Print("Status: |cffff0000EXPIRED|r")
+			end
+		else
+			ATW.Print("Status: |cffff9900NOT ACTIVE|r (no dodge detected)")
+		end
+
+		-- Show tracked mob info (optional advanced tracking)
+		if state.OverpowerTarget then
+			ATW.Print("Last dodge from: " .. state.OverpowerTarget)
+			if state.OverpowerGUID then
+				ATW.Print("GUID: " .. string.sub(state.OverpowerGUID, 1, 16))
+			end
+		end
+
+		-- Current stance
+		local stance = ATW.Stance and ATW.Stance() or 0
+		local stanceName = ATW.StanceNames and ATW.StanceNames[stance] or "Unknown"
+		local inBattle = (stance == 1)
+		ATW.Print("Stance: " .. stanceName .. (inBattle and " |cff00ff00(can OP)|r" or " |cffff9900(need dance)|r"))
+
+		-- Rage check
+		local rage = UnitMana("player") or 0
+		local opCost = 5
+		local danceRage = AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.DanceRage or 10
+		local totalNeeded = inBattle and opCost or (opCost + danceRage)
+		local canUse = rage >= totalNeeded
+		ATW.Print("Rage: " .. rage .. "/" .. totalNeeded .. (canUse and " |cff00ff00OK|r" or " |cffff0000LOW|r"))
+
+		-- Note about mechanics
+		ATW.Print("")
+		ATW.Print("|cff888888Note: In vanilla, Overpower works on|r")
+		ATW.Print("|cff888888ANY target after a dodge (global proc)|r")
+
+	elseif cmd == "decision" or cmd == "dec" then
+		-- Debug decision simulator
+		if ATW.Engine and ATW.Engine.PrintDecisionDebug then
+			ATW.Engine.PrintDecisionDebug()
+		else
+			ATW.Print("Decision simulator not loaded")
+		end
+
 	else
 		-- Help
 		ATW.Print("Commands:")
@@ -422,6 +479,7 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw prio - Show DPR priority list")
 		ATW.Print("  /atw sim - Simulate next 5 abilities")
 		ATW.Print("  /atw engine - Full combat simulation (20s)")
+		ATW.Print("  /atw decision - Debug decision simulator")
 		ATW.Print("  /atw strat - Compare strategies")
 		ATW.Print("  /atw rage - Show rage economy model")
 		ATW.Print("  /atw rend - Show Rend decision (HP-based)")
@@ -430,7 +488,8 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw mob - Show creature type detection")
 		ATW.Print("  /atw gear - Show set bonuses/trinkets")
 		ATW.Print("  /atw spells - Show spell ranks")
-		ATW.Print("  /atw stance | stats | ttd | swing")
+		ATW.Print("  /atw op - Debug Overpower status")
+		ATW.Print("  /atw stance | stats | ttd | swing | hp")
 	end
 end
 

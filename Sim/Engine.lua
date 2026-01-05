@@ -42,34 +42,41 @@ Engine.GCD = 1500
 -- Execute phase threshold
 Engine.EXECUTE_THRESHOLD = 20  -- 20% HP
 
--- Execute formula (TurtleWoW rank 5): 600 + (15 * excessRage)
-Engine.EXECUTE_BASE = 600
+-- Spell values are now DYNAMIC based on player's spell ranks
+-- Use ATW.GetXXX() functions from Player/Talents.lua
+-- These fallback constants are only used if functions not available
+
+-- Execute: ATW.GetExecuteBase(), ATW.GetExecuteCoeff()
+Engine.EXECUTE_BASE = 600      -- Fallback: Rank 5
 Engine.EXECUTE_RAGE_MULT = 15
 
--- Bloodthirst (TurtleWoW): 200 + AP * 0.35
+-- Bloodthirst: ATW.GetBloodthirstDamage(ap)
 Engine.BT_BASE = 200
 Engine.BT_AP_COEFF = 0.35
 
--- Whirlwind normalized speed
-Engine.WW_NORM_SPEED = 2.4  -- Normalized for 1H
+-- Whirlwind: normalized speed (constant across ranks)
+Engine.WW_NORM_SPEED = 2.4
 
--- Mortal Strike bonus damage (rank 4)
-Engine.MS_BONUS = 160
+-- Mortal Strike: ATW.GetMortalStrikeBonus()
+Engine.MS_BONUS = 120          -- Fallback: Rank 4
 
--- Heroic Strike bonus damage (rank 9)
-Engine.HS_BONUS = 157
+-- Heroic Strike: ATW.GetHeroicStrikeBonus()
+Engine.HS_BONUS = 157          -- Fallback: Rank 9
 
--- Cleave bonus damage
-Engine.CLEAVE_BONUS = 50
+-- Cleave: ATW.GetCleaveBonus()
+Engine.CLEAVE_BONUS = 50       -- Fallback: Rank 5
 
--- Overpower bonus damage
-Engine.OP_BONUS = 35
+-- Overpower: ATW.GetOverpowerBonus()
+Engine.OP_BONUS = 35           -- Fallback: Rank 4
 
--- Hamstring damage (rank 3)
-Engine.HAMSTRING_DMG = 45
+-- Hamstring: ATW.GetHamstringDamage()
+Engine.HAMSTRING_DMG = 45      -- Fallback: Rank 3
 
--- Slam bonus (TurtleWoW)
-Engine.SLAM_BONUS = 87
+-- Slam: ATW.GetSlamBonus()
+Engine.SLAM_BONUS = 87         -- Fallback: Rank 4
+
+-- Battle Shout: ATW.GetBattleShoutAP()
+Engine.BATTLE_SHOUT_AP = 232   -- Fallback: Rank 7
 
 -- Rend (TurtleWoW): base damage + 5% AP per tick
 -- Base tick damage and ticks are dynamically calculated from spell rank
@@ -222,17 +229,24 @@ function Engine.CreateState()
 		-- HS/Cleave queue
 		swingQueued = nil,  -- nil, "hs", "cleave"
 
+		-- Combat state (for Charge - can only be used out of combat)
+		inCombat = false,
+
 		-- Cooldowns (time when available, 0 = ready)
 		cooldowns = {
 			Bloodthirst = 0,
 			Whirlwind = 0,
 			Execute = 0,
 			Overpower = 0,
+			MortalStrike = 0,
 			DeathWish = 0,
 			Recklessness = 0,
 			Bloodrage = 0,
 			BerserkerRage = 0,
 			SweepingStrikes = 0,
+			Pummel = 0,
+			Slam = 0,
+			Charge = 0,
 		},
 
 		-- Active buffs: {endTime, stacks, effect}
@@ -455,6 +469,15 @@ function Engine.InitPlayer(state)
 	end
 	if ATW.GetOHSwingRemaining and state.hasOH then
 		state.ohTimer = (ATW.GetOHSwingRemaining() or 0) * 1000
+	end
+
+	-- Initialize Overpower state from real game state
+	if ATW.State and ATW.State.Overpower then
+		local windowRemaining = 4 - (GetTime() - ATW.State.Overpower)
+		if windowRemaining > 0 then
+			state.overpowerReady = true
+			state.overpowerEnd = state.time + (windowRemaining * 1000)
+		end
 	end
 end
 
@@ -908,7 +931,9 @@ function Engine.UseAbility(state, name)
 
 		-- TurtleWoW Execute: base + (rage * multiplier)
 		-- Rank 5: 600 + (usedRage * 15)
-		damage = Engine.EXECUTE_BASE + (usedRage * Engine.EXECUTE_RAGE_MULT)
+		local execBase = ATW.GetExecuteBase and ATW.GetExecuteBase() or Engine.EXECUTE_BASE
+		local execCoeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or Engine.EXECUTE_RAGE_MULT
+		damage = execBase + (usedRage * execCoeff)
 
 		-- Consume ALL rage (Zebouski: spell.usedrage = ~~this.player.rage)
 		state.rage = 0
@@ -941,11 +966,13 @@ function Engine.UseAbility(state, name)
 
 		elseif name == "MortalStrike" then
 			-- Weapon + bonus + (ap/14) * normSpeed
-			damage = Engine.RollWeaponDamage(state, false, true, Engine.WW_NORM_SPEED) + Engine.MS_BONUS
+			local msBonus = ATW.GetMortalStrikeBonus and ATW.GetMortalStrikeBonus() or Engine.MS_BONUS
+			damage = Engine.RollWeaponDamage(state, false, true, Engine.WW_NORM_SPEED) + msBonus
 
 		elseif name == "Slam" then
 			-- Weapon + bonus + (ap/14) * weaponSpeed
-			damage = Engine.RollWeaponDamage(state, false, false) + Engine.SLAM_BONUS
+			local slamBonus = ATW.GetSlamBonus and ATW.GetSlamBonus() or Engine.SLAM_BONUS
+			damage = Engine.RollWeaponDamage(state, false, false) + slamBonus
 
 		elseif name == "HeroicStrike" then
 			-- Queue for next swing (damage calculated on swing)
@@ -964,7 +991,8 @@ function Engine.UseAbility(state, name)
 
 		elseif name == "Overpower" then
 			-- Weapon + bonus + (ap/14) * speed
-			damage = Engine.RollWeaponDamage(state, false, false) + Engine.OP_BONUS
+			local opBonus = ATW.GetOverpowerBonus and ATW.GetOverpowerBonus() or Engine.OP_BONUS
+			damage = Engine.RollWeaponDamage(state, false, false) + opBonus
 			state.overpowerReady = false
 
 			-- Dreadnaught 6-set bonus: +30% Overpower damage
@@ -1091,7 +1119,8 @@ function Engine.ProcessAutoAttack(state, isOH)
 
 		if state.swingQueued == "hs" then
 			-- Heroic Strike: weapon + bonus (uses weapon speed for AP, not normalized)
-			damage = damage + Engine.HS_BONUS
+			local hsBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS
+			damage = damage + hsBonus
 			state.swingQueued = nil
 
 			table.insert(state.sequence, {
@@ -1103,7 +1132,8 @@ function Engine.ProcessAutoAttack(state, isOH)
 
 		elseif state.swingQueued == "cleave" then
 			-- Cleave: weapon + bonus, hits 2 targets
-			damage = damage + Engine.CLEAVE_BONUS
+			local cleaveBonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or Engine.CLEAVE_BONUS
+			damage = damage + cleaveBonus
 			state.swingQueued = nil
 
 			-- First target damage
@@ -1111,7 +1141,7 @@ function Engine.ProcessAutoAttack(state, isOH)
 
 			-- Second target (if available) - Zebouski calls attackmh recursively
 			if aliveTargets >= 2 then
-				local secondTargetDmg = Engine.RollWeaponDamage(state, false, false) + Engine.CLEAVE_BONUS
+				local secondTargetDmg = Engine.RollWeaponDamage(state, false, false) + cleaveBonus
 				damage = firstTargetDmg + secondTargetDmg
 			end
 
@@ -1203,7 +1233,16 @@ function Engine.ChooseAbility(state)
 	local inExecute = Engine.AnyTargetInExecute(state)
 	local aliveTargets = Engine.CountAliveTargets(state)
 
-	-- Priority list
+	-- Check Overpower window urgency (boost priority if expiring)
+	local overpowerUrgent = false
+	if state.overpowerReady and state.overpowerEnd then
+		local windowRemaining = (state.overpowerEnd - state.time) / 1000
+		if windowRemaining > 0 and windowRemaining <= 2 then
+			overpowerUrgent = true
+		end
+	end
+
+	-- Priority list (dynamic based on Overpower urgency)
 	local priorities = {
 		-- Off-GCD abilities first
 		{name = "Bloodrage", offGCD = true, condition = function()
@@ -1222,6 +1261,11 @@ function Engine.ChooseAbility(state)
 		-- Execute phase
 		{name = "Execute", condition = function() return inExecute end},
 
+		-- URGENT Overpower (window about to expire) - before core rotation
+		{name = "Overpower", condition = function()
+			return overpowerUrgent and state.overpowerReady
+		end},
+
 		-- Core rotation
 		{name = "Bloodthirst"},
 		{name = "MortalStrike", condition = function()
@@ -1229,9 +1273,9 @@ function Engine.ChooseAbility(state)
 		end},
 		{name = "Whirlwind"},
 
-		-- React abilities
+		-- Normal Overpower (window not urgent)
 		{name = "Overpower", condition = function()
-			return state.overpowerReady
+			return not overpowerUrgent and state.overpowerReady
 		end},
 
 		-- Rage dumps
@@ -1323,7 +1367,8 @@ function Engine.ShouldCancelSwing(state)
 	local wwReady = state.cooldowns.Whirlwind <= state.time
 
 	-- Calculate HS/Cleave expected value
-	local hsDamage = Engine.HS_BONUS + ((state.mhDmgMin + state.mhDmgMax) / 2)
+	local hsBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS
+	local hsDamage = hsBonus + ((state.mhDmgMin + state.mhDmgMax) / 2)
 	local hsValue = hsDamage * Engine.GetDamageMod(state)
 
 	-- Factor in crit chance
@@ -1351,13 +1396,15 @@ function Engine.ShouldCancelSwing(state)
 		end
 
 		-- Execute with full rage is MUCH better than HS
-		-- Execute = 600 + (rage * 15)
-		local execDmg = Engine.EXECUTE_BASE + (state.rage * Engine.EXECUTE_RAGE_MULT)
+		-- Execute = base + (rage * coeff)
+		local execBase = ATW.GetExecuteBase and ATW.GetExecuteBase() or Engine.EXECUTE_BASE
+		local execCoeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or Engine.EXECUTE_RAGE_MULT
+		local execDmg = execBase + (state.rage * execCoeff)
 
 		-- If we wait for HS, we get HS damage but Execute later with less rage
 		-- (rage spent on HS is rage not spent on Execute)
 		local rageCost = state.swingQueued == "hs" and 15 or 20
-		local execWithHS = Engine.EXECUTE_BASE + ((state.rage - rageCost) * Engine.EXECUTE_RAGE_MULT)
+		local execWithHS = execBase + ((state.rage - rageCost) * execCoeff)
 
 		local gainFromCancel = execDmg - (execWithHS + hsValue)
 
@@ -1550,347 +1597,6 @@ function Engine.Simulate(duration, strategy)
 	}
 end
 
----------------------------------------
--- Simulate with Rend Spreading Strategy
--- Applies Rend to multiple targets in melee range
--- Uses proper Tactical Mastery and bleed immunity checks
----------------------------------------
-function Engine.SimulateRendSpread(duration)
-	duration = duration or 30  -- 30 second simulation window
-
-	local state = Engine.CreateState()
-	state.maxTime = duration * 1000
-	state.strategy = "rend_spread"
-
-	Engine.InitTargets(state)
-	Engine.InitPlayer(state)
-
-	-- Get targets that can be Rended:
-	-- 1. NOT bleed immune (Mechanical, Elemental, Undead)
-	-- 2. TTD > 15s (worth the rage investment)
-	-- 3. In melee range (5yd for Rend)
-	local rendTargets = {}
-	for id, target in pairs(state.targets) do
-		if not target.bleedImmune and target.ttd > 15000 then
-			-- Sort by TTD descending (Rend highest TTD first for max value)
-			table.insert(rendTargets, {id = id, ttd = target.ttd, guid = target.guid})
-		end
-	end
-
-	-- Sort by TTD descending
-	table.sort(rendTargets, function(a, b) return a.ttd > b.ttd end)
-
-	-- Track which targets have Rend
-	local rendedTargets = {}
-	local rendIndex = 1
-
-	-- Track Anger Management
-	local lastAngerManagementTick = 0
-
-	-- Simulation loop
-	while state.time < state.maxTime do
-		local deltaTime = Engine.GetNextEvent(state)
-		state.time = state.time + deltaTime
-		if state.time > state.maxTime then break end
-
-		-- Anger Management
-		if ATW.Talents and ATW.Talents.AngerManagement then
-			while state.time >= lastAngerManagementTick + 3000 do
-				lastAngerManagementTick = lastAngerManagementTick + 3000
-				state.rage = math.min(state.rage + 1, 100)
-			end
-		end
-
-		Engine.UpdateTargetHP(state, deltaTime)
-		state.mhTimer = state.mhTimer - deltaTime
-		if state.hasOH then state.ohTimer = state.ohTimer - deltaTime end
-
-		Engine.ProcessDoTs(state)
-
-		-- Auto-attacks
-		if state.mhTimer <= 0 then
-			Engine.ProcessAutoAttack(state, false)
-			local haste = Engine.GetHasteMod(state)
-			state.mhTimer = state.mhSpeed / haste
-		end
-		if state.hasOH and state.ohTimer <= 0 then
-			Engine.ProcessAutoAttack(state, true)
-			local haste = Engine.GetHasteMod(state)
-			state.ohTimer = state.ohSpeed / haste
-		end
-
-		-- Rend spreading priority
-		local usedAbility = false
-
-		-- First: Apply Rend to all viable targets (non-immune only)
-		if rendIndex <= table.getn(rendTargets) and state.gcdEnd <= state.time then
-			local targetInfo = rendTargets[rendIndex]
-			local targetId = targetInfo.id
-			local target = state.targets[targetId]
-
-			-- Double-check bleed immunity (in case state changed)
-			if target and not target.bleedImmune and not rendedTargets[targetId] then
-				-- Calculate rage needed (10 for Rend + potential stance switch loss)
-				local rendCost = 10
-				local needsStance = (state.stance ~= 1 and state.stance ~= 2)
-				local effectiveCost = rendCost
-
-				if needsStance then
-					-- Factor in rage loss from stance switch (Tactical Mastery)
-					local rageLost = math.max(0, state.rage - state.tacticalMastery)
-					effectiveCost = rendCost + rageLost
-				end
-
-				if state.rage >= effectiveCost then
-					-- Switch stance if needed (using Tactical Mastery)
-					if needsStance then
-						Engine.SwitchStance(state, 1)  -- Go to Battle Stance
-					end
-
-					-- Apply Rend (if we still have enough rage after switch)
-					if state.rage >= rendCost then
-						Engine.ApplyRend(state, targetId)
-						state.rage = state.rage - rendCost
-						state.gcdEnd = state.time + Engine.GCD
-						rendedTargets[targetId] = true
-						rendIndex = rendIndex + 1
-						usedAbility = true
-
-						table.insert(state.sequence, {
-							time = state.time,
-							ability = "Rend",
-							damage = 0,
-							rage = state.rage,
-							target = targetId,
-							guid = targetInfo.guid,  -- Store GUID for real casting
-						})
-					end
-				end
-			else
-				-- Skip this target (immune or already has Rend)
-				rendIndex = rendIndex + 1
-			end
-		end
-
-		-- Then: Normal rotation (switch back to Berserker for BT/WW)
-		if not usedAbility then
-			-- Check if we should go back to Berserker
-			if state.stance ~= 3 and state.stanceGcdEnd <= state.time then
-				local btReady = state.cooldowns.Bloodthirst <= state.time
-				local wwReady = state.cooldowns.Whirlwind <= state.time
-				if (btReady or wwReady) and state.rage >= 25 then
-					Engine.SwitchStance(state, 3)
-				end
-			end
-
-			local abilityName, isOffGCD = Engine.ChooseAbility(state)
-			if abilityName and abilityName ~= "Rend" then
-				Engine.UseAbility(state, abilityName)
-			end
-		end
-
-		-- Expire buffs
-		for buffName, buff in pairs(state.buffs) do
-			if buff.endTime and buff.endTime <= state.time then
-				state.buffs[buffName] = nil
-			end
-		end
-
-		if deltaTime == 0 then state.time = state.time + 1 end
-	end
-
-	return {
-		totalDamage = state.totalDamage,
-		abilityDamage = state.abilityDamage,
-		autoDamage = state.autoDamage,
-		dotDamage = state.dotDamage,
-		duration = state.maxTime / 1000,
-		dps = state.totalDamage / (state.maxTime / 1000),
-		sequence = state.sequence,
-		rendTargets = table.getn(rendTargets),
-		bleedImmuneSkipped = state.rendableTargets - table.getn(rendTargets),
-	}
-end
-
----------------------------------------
--- Rend Priority Logic (Rule-Based, not Simulation)
--- Uses HP% as primary signal since TTD is unstable at combat start
--- This ensures Rend is applied EARLY when it should be
----------------------------------------
-
--- Constants for Rend decision-making
-Engine.REND_DURATION = 21       -- 21 seconds (7 ticks × 3s)
-Engine.REND_MIN_TICKS = 3       -- Need at least 3 ticks to be worth it (9s)
-Engine.REND_FULL_VALUE_HP = 70  -- Above 70% HP = assume full duration
-Engine.REND_MIN_HP = 30         -- Below 30% HP = don't Rend (dying)
-
---[[
-Mathematical basis for Rend decision:
-
-Rend total damage (TurtleWoW): 147 + (AP × 0.35) over 21s
-Rend DPR at full duration: (147 + 0.35×AP) / 10 rage
-
-With 1500 AP: (147 + 525) / 10 = 67.2 DPR
-Compare to BT: ~725 / 30 = 24.2 DPR
-Compare to HS: ~300 / 15 = 20 DPR
-
-Even at 50% ticks (3-4 ticks), Rend DPR is still ~33.6, beating everything.
-Therefore: Apply Rend if target will get AT LEAST 3 ticks (9 seconds).
-
-HP% heuristic:
-- HP > 70%: Very likely to live 21s+ → Apply Rend
-- HP 30-70%: Check TTD if available, else use HP/damage heuristic
-- HP < 30%: Likely dying soon → Don't Rend
-
-This is how Hekili and similar addons handle DoT decisions.
-]]
-
----------------------------------------
--- Should apply Rend to current target?
--- Uses HP% as primary signal (stable, instant)
--- Returns: shouldApply, reason
----------------------------------------
-function Engine.ShouldApplyRend()
-	-- Check if target exists
-	if not UnitExists("target") or UnitIsDead("target") then
-		return false, "no target"
-	end
-
-	-- Check for bleed immunity
-	if ATW.IsBleedImmune and ATW.IsBleedImmune("target") then
-		return false, "bleed immune"
-	end
-
-	-- Check if Rend already applied (uses RendTracker + UnitDebuff)
-	-- ATW.HasRend handles both tracking and actual debuff check
-	if ATW.HasRend and ATW.HasRend("target") then
-		return false, "already applied"
-	end
-
-	-- Get HP percentage (instantly available, stable)
-	local hp = UnitHealth("target")
-	local maxHp = UnitHealthMax("target")
-	if maxHp == 0 then return false, "invalid hp" end
-
-	local hpPercent = (hp / maxHp) * 100
-
-	-- HIGH HP (>70%): Apply Rend without hesitation
-	-- At 70%+ HP, target almost certainly lives for full Rend duration
-	if hpPercent >= Engine.REND_FULL_VALUE_HP then
-		return true, "high HP (" .. string.format("%.0f", hpPercent) .. "%)"
-	end
-
-	-- LOW HP (<30%): Don't Rend, target dying soon
-	if hpPercent < Engine.REND_MIN_HP then
-		return false, "low HP (" .. string.format("%.0f", hpPercent) .. "%)"
-	end
-
-	-- MEDIUM HP (30-70%): Check TTD if available
-	local ttd = 999
-	if ATW.GetTargetTTD then
-		ttd = ATW.GetTargetTTD()
-	end
-
-	-- TTD available and reliable
-	if ttd < 999 then
-		-- Need at least 9s for 3 ticks (minimum value)
-		if ttd >= 9 then
-			return true, "TTD " .. string.format("%.0f", ttd) .. "s"
-		else
-			return false, "TTD too low (" .. string.format("%.0f", ttd) .. "s)"
-		end
-	end
-
-	-- TTD not available: Use HP% heuristic
-	-- At 50% HP, assume ~15s remaining (reasonable for most fights)
-	-- Linear interpolation: TTD ≈ HP% × 0.3 seconds
-	local estimatedTTD = hpPercent * 0.3
-
-	if estimatedTTD >= 9 then
-		return true, "HP heuristic (" .. string.format("%.0f", hpPercent) .. "%)"
-	end
-
-	return false, "HP heuristic too low"
-end
-
----------------------------------------
--- Should apply Rend to a specific GUID?
--- For multi-target Rend spreading
--- Uses SuperWoW UnitDebuff(guid) to verify Rend isn't already applied
--- Returns: shouldApply, reason
----------------------------------------
-function Engine.ShouldApplyRendToGUID(guid, hpPercent, ttd)
-	if not guid then return false, "no guid" end
-
-	-- Check if Rend already applied (using SuperWoW's GUID-based UnitDebuff)
-	-- This is the REAL check - verifies actual debuff state on the mob
-	-- Reference: https://github.com/balakethelock/SuperWoW/wiki/Features
-	if ATW.HasRend and ATW.HasRend(guid) then
-		return false, "already has Rend"
-	end
-
-	-- Check bleed immunity by GUID
-	if ATW.IsBleedImmuneGUID and ATW.IsBleedImmuneGUID(guid) then
-		return false, "bleed immune"
-	end
-
-	hpPercent = hpPercent or 100
-	ttd = ttd or 999
-
-	-- Same logic as main target
-	if hpPercent >= Engine.REND_FULL_VALUE_HP then
-		return true, "high HP"
-	end
-
-	if hpPercent < Engine.REND_MIN_HP then
-		return false, "low HP"
-	end
-
-	-- Medium HP: use TTD or heuristic
-	if ttd < 999 then
-		return ttd >= 9, "TTD check"
-	end
-
-	local estimatedTTD = hpPercent * 0.3
-	return estimatedTTD >= 9, "HP heuristic"
-end
-
----------------------------------------
--- Get Rend priority score
--- Higher = more urgent to apply Rend
--- Returns: score (0-100), where 100 = must Rend NOW
----------------------------------------
-function Engine.GetRendPriority()
-	local shouldRend, reason = Engine.ShouldApplyRend()
-
-	if not shouldRend then
-		return 0, reason
-	end
-
-	-- Calculate priority based on HP%
-	-- Higher HP = Higher priority (apply earlier = more value)
-	local hp = UnitHealth("target")
-	local maxHp = UnitHealthMax("target")
-	if maxHp == 0 then return 0, "invalid hp" end
-
-	local hpPercent = (hp / maxHp) * 100
-
-	-- Priority formula:
-	-- 100% HP = priority 100 (MUST apply now)
-	-- 70% HP = priority 70
-	-- 50% HP = priority 50
-	-- 30% HP = priority 30 (borderline)
-
-	local priority = hpPercent
-
-	-- Boost priority if target has high HP and we have rage
-	local rage = UnitMana("player") or 0
-	if hpPercent >= 90 and rage >= 10 then
-		priority = 100  -- Maximum priority at pull
-	end
-
-	return priority, reason
-end
 
 ---------------------------------------
 -- GUID Targeting Functions
@@ -1934,213 +1640,17 @@ Engine.GetExecuteTargets = function()
 end
 
 ---------------------------------------
--- Compare strategies and find optimal
--- Returns: bestStrategy, damageGain%, results
----------------------------------------
-function Engine.CompareStrategies(duration)
-	duration = duration or 30  -- 30 second comparison window
-
-	-- Get enemy count first
-	local enemies = {}
-	if ATW.GetEnemiesWithTTD then
-		enemies = ATW.GetEnemiesWithTTD(5)
-	end
-	local numEnemies = table.getn(enemies)
-
-	-- Normal rotation
-	local normalResult = Engine.Simulate(duration, "normal")
-
-	-- Only compare Rend spread if 2+ enemies
-	if numEnemies >= 2 then
-		local rendResult = Engine.SimulateRendSpread(duration)
-
-		local gain = rendResult.totalDamage - normalResult.totalDamage
-		local gainPercent = 0
-		if normalResult.totalDamage > 0 then
-			gainPercent = (gain / normalResult.totalDamage) * 100
-		end
-
-		if gain > 0 then
-			return "rend_spread", gainPercent, {
-				normal = normalResult,
-				rend_spread = rendResult,
-			}
-		end
-	end
-
-	return "normal", 0, {
-		normal = normalResult,
-	}
-end
-
----------------------------------------
--- Check if Rend spreading is optimal right now
--- Used by GetRecommendation() to adjust priority
----------------------------------------
-function Engine.ShouldSpreadRend()
-	local enemies = {}
-	if ATW.GetEnemiesWithTTD then
-		enemies = ATW.GetEnemiesWithTTD(5)
-	end
-
-	if table.getn(enemies) < 2 then
-		return false, 0, 0
-	end
-
-	-- Count viable Rend targets
-	local viableTargets = 0
-	for _, enemy in ipairs(enemies) do
-		if not enemy.bleedImmune and enemy.ttd >= 15 then
-			viableTargets = viableTargets + 1
-		end
-	end
-
-	if viableTargets < 2 then
-		return false, 0, 0
-	end
-
-	-- Full 30s comparison for accurate strategy decision
-	local strategy, gainPercent = Engine.CompareStrategies(30)
-
-	if strategy == "rend_spread" and gainPercent > 1 then
-		return true, viableTargets, gainPercent
-	end
-
-	return false, viableTargets, 0
-end
-
----------------------------------------
 -- Get next recommended ability (for display)
--- Considers: Execute pooling, Rend (rule-based), normal rotation
+-- 100% SIMULATION-BASED - No hardcoded priorities
+-- Simulates all valid actions over 6s horizon and picks highest damage
 -- Returns: abilityName, isOffGCD, pooling, timeToExecute, targetGUID, targetStance
---
--- IMPORTANT: Rend uses RULE-BASED logic (HP%), not simulation.
--- This ensures Rend is recommended EARLY at pull when TTD is unknown.
 ---------------------------------------
 function Engine.GetRecommendation()
-	local state = Engine.CreateState()
-	state.maxTime = 10000  -- Only need short sim for next ability
-
-	Engine.InitTargets(state)
-	Engine.InitPlayer(state)
-
-	local rage = UnitMana("player") or 0
-	local currentStance = ATW.Stance and ATW.Stance() or 3
-
-	-- Check for execute pooling
-	local shouldPool, timeToExecute = Engine.ShouldPoolForExecute(state)
-
-	---------------------------------------
-	-- PRIORITY 1: Execute (any mob in execute range)
-	---------------------------------------
-	local executeGUID, executeUnit, executeHP = Engine.GetExecuteTarget()
-	if executeGUID or executeUnit then
-		local execCost = ATW.Talents and ATW.Talents.ExecCost or 15
-
-		if rage >= execCost then
-			local needsStance = (currentStance ~= 1 and currentStance ~= 3)
-
-			if needsStance then
-				return "Execute", false, false, 0, executeGUID, 3
-			else
-				return "Execute", false, false, 0, executeGUID, nil
-			end
-		end
-	end
-
-	---------------------------------------
-	-- PRIORITY 2: Rend (RULE-BASED, not simulation)
-	-- Uses HP% as primary signal - stable at combat start
-	-- This ensures Rend is applied EARLY when it matters most
-	---------------------------------------
-	local rendPriority, rendReason = Engine.GetRendPriority()
-
-	-- Apply Rend if priority > 50 (HP% > 50% or at pull)
-	-- Only if we're not in execute phase and have rage
-	if rendPriority >= 50 and not (executeGUID or executeUnit) then
-		local rendCost = 10
-		local danceRage = AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.DanceRage or 10
-
-		-- In correct stance?
-		local inRendStance = (currentStance == 1 or currentStance == 2)
-
-		if inRendStance and rage >= rendCost then
-			-- Can Rend immediately
-			return "Rend", false, false, 0, nil, nil
-		elseif not inRendStance and rage >= rendCost + danceRage then
-			-- Need stance dance - recommend Rend, rotation handles dance
-			return "Rend", true, false, 0, nil, 1  -- targetStance = 1 (Battle)
-		end
-		-- Not enough rage for Rend + dance, fall through to normal rotation
-	end
-
-	---------------------------------------
-	-- PRIORITY 3: Rend on other enemies (via nameplates)
-	-- No arbitrary threshold - let damage calculation decide
-	-- Uses rule-based logic + per-GUID Rend tracking
-	---------------------------------------
-	local enemies = {}
-	if ATW.GetEnemiesWithTTD then
-		enemies = ATW.GetEnemiesWithTTD(5)  -- 5yd = Rend range
-	end
-
-	-- Process ANY enemies we find (no >= 2 threshold)
-	if table.getn(enemies) >= 1 then
-		-- Sort by HP% descending (prioritize high HP targets for Rend)
-		table.sort(enemies, function(a, b)
-			local aHP = (a.hp and a.maxHp and a.maxHp > 0) and (a.hp / a.maxHp) or 1
-			local bHP = (b.hp and b.maxHp and b.maxHp > 0) and (b.hp / b.maxHp) or 1
-			return aHP > bHP
-		end)
-
-		-- Find best Rend target that doesn't have Rend
-		for _, enemy in ipairs(enemies) do
-			if enemy.guid then
-				-- Skip if already has Rend
-				if enemy.hasRend then
-					-- Skip this target
-				else
-					-- Get HP% for this target from nameplate
-					local hpPercent = 100
-					if enemy.hp and enemy.maxHp and enemy.maxHp > 0 then
-						hpPercent = (enemy.hp / enemy.maxHp) * 100
-					end
-
-					-- ShouldApplyRendToGUID checks: has Rend, bleed immune, HP%
-					local shouldRend, _ = Engine.ShouldApplyRendToGUID(enemy.guid, hpPercent, enemy.ttd)
-
-					if shouldRend then
-						local inRendStance = (currentStance == 1 or currentStance == 2)
-						local rendCost = 10
-						local danceRage = AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.DanceRage or 10
-
-						if inRendStance and rage >= rendCost then
-							return "Rend", false, false, 0, enemy.guid, nil
-						elseif not inRendStance and rage >= rendCost + danceRage then
-							return "Rend", true, false, 0, enemy.guid, 1
-						end
-					end
-				end
-			end
-		end
-	end
-
-	---------------------------------------
-	-- PRIORITY 4: Normal rotation (simulation-based)
-	---------------------------------------
-	local abilityName, isOffGCD = Engine.ChooseAbility(state)
-
-	-- If pooling and ability isn't high priority, might want to wait
-	local pooling = false
-	if shouldPool and abilityName then
-		if abilityName ~= "Bloodthirst" and abilityName ~= "Whirlwind" and
-		   abilityName ~= "Execute" and abilityName ~= "Bloodrage" then
-			pooling = true
-		end
-	end
-
-	return abilityName, isOffGCD, pooling, timeToExecute / 1000, nil, nil
+	return Engine.GetRecommendationSimBased()
 end
+
+-- NOTE: Legacy GetRecommendationLegacy has been REMOVED
+-- All decisions are now 100% simulation-based via GetRecommendationSimBased()
 
 ---------------------------------------
 -- Simulate ahead with full engine (returns sequence)
@@ -2167,66 +1677,6 @@ function Engine.SimulateAhead(steps, duration)
 end
 
 ---------------------------------------
--- Debug: Print Rend decision info
----------------------------------------
-function Engine.PrintRendDecision()
-	ATW.Print("=== Rend Decision (Rule-Based) ===")
-
-	-- Get current target info
-	if not UnitExists("target") then
-		ATW.Print("No target")
-		return
-	end
-
-	local hp = UnitHealth("target")
-	local maxHp = UnitHealthMax("target")
-	local hpPercent = maxHp > 0 and (hp / maxHp) * 100 or 0
-
-	ATW.Print("Target HP: " .. string.format("%.1f", hpPercent) .. "%")
-
-	-- TTD status
-	local ttd = ATW.GetTargetTTD and ATW.GetTargetTTD() or 999
-	if ttd < 999 then
-		ATW.Print("TTD: " .. string.format("%.1f", ttd) .. "s (available)")
-	else
-		ATW.Print("TTD: Unknown (using HP heuristic)")
-	end
-
-	-- Bleed immunity
-	local isImmune = ATW.IsBleedImmune and ATW.IsBleedImmune("target")
-	if isImmune then
-		ATW.Print("|cffff0000BLEED IMMUNE|r")
-	end
-
-	-- Has Rend? (uses RendTracker + UnitDebuff)
-	local hasRend = ATW.HasRend and ATW.HasRend("target")
-	if hasRend then
-		ATW.Print("Rend: |cff00ff00ACTIVE|r (tracked)")
-	else
-		ATW.Print("Rend: Not applied")
-	end
-
-	-- Decision
-	local shouldRend, reason = Engine.ShouldApplyRend()
-	local priority, _ = Engine.GetRendPriority()
-
-	ATW.Print("")
-	if shouldRend then
-		ATW.Print("|cff00ff00SHOULD REND|r: " .. reason)
-		ATW.Print("Priority: " .. string.format("%.0f", priority) .. "/100")
-	else
-		ATW.Print("|cffff0000DON'T REND|r: " .. reason)
-	end
-
-	-- Thresholds
-	ATW.Print("")
-	ATW.Print("Thresholds:")
-	ATW.Print("  Full value: HP >= " .. Engine.REND_FULL_VALUE_HP .. "%")
-	ATW.Print("  Minimum: HP >= " .. Engine.REND_MIN_HP .. "%")
-	ATW.Print("  Min TTD: 9s (3 ticks)")
-end
-
----------------------------------------
 -- Debug: Print simulation results
 ---------------------------------------
 function Engine.PrintSimulation(duration)
@@ -2246,5 +1696,1240 @@ function Engine.PrintSimulation(duration)
 		local s = result.sequence[i]
 		ATW.Print("  " .. string.format("+%.1fs", s.time/1000) .. " " ..
 			s.ability .. " -> " .. string.format("%.0f", s.damage) .. " dmg")
+	end
+end
+
+---------------------------------------
+-- DECISION SIMULATOR
+-- True simulation-based decision making
+-- Instead of hardcoded priorities, we simulate
+-- each possible action and pick the one that
+-- maximizes damage over a short horizon
+---------------------------------------
+
+-- Configuration
+Engine.DECISION_HORIZON = 6000   -- 6 seconds (4 GCDs)
+Engine.DECISION_GCD = 1500       -- 1.5s GCD
+
+---------------------------------------
+-- Deep copy state for branching
+---------------------------------------
+function Engine.DeepCopyState(state)
+	local copy = {}
+	for k, v in pairs(state) do
+		if type(v) == "table" then
+			copy[k] = {}
+			for k2, v2 in pairs(v) do
+				if type(v2) == "table" then
+					copy[k][k2] = {}
+					for k3, v3 in pairs(v2) do
+						copy[k][k2][k3] = v3
+					end
+				else
+					copy[k][k2] = v2
+				end
+			end
+		else
+			copy[k] = v
+		end
+	end
+	return copy
+end
+
+---------------------------------------
+-- Capture current combat state from game
+-- Used for live decision making
+-- Full MULTI-TARGET support (Zebouski-style)
+---------------------------------------
+function Engine.CaptureCurrentState()
+	local state = Engine.CreateState()
+
+	-- Initialize from current game state
+	Engine.InitPlayer(state)
+	Engine.InitTargets(state)
+
+	-- Current rage
+	state.rage = UnitMana("player") or 0
+
+	-- Current stance
+	state.stance = ATW.Stance and ATW.Stance() or 3
+
+	-- Overpower window
+	if ATW.State and ATW.State.Overpower then
+		local windowRemaining = 4 - (GetTime() - ATW.State.Overpower)
+		if windowRemaining > 0 then
+			state.overpowerReady = true
+			state.overpowerEnd = windowRemaining * 1000
+		end
+	end
+
+	-- Battle Shout status
+	state.hasBattleShout = ATW.Buff and ATW.Buff("player", "Ability_Warrior_BattleShout")
+
+	---------------------------------------
+	-- BUFF TRACKING for cooldown abilities
+	---------------------------------------
+	-- Death Wish buff (+20% damage)
+	state.hasDeathWish = ATW.Buff and ATW.Buff("player", "Spell_Shadow_DeathPact")
+
+	-- Recklessness buff (+100% crit)
+	state.hasRecklessness = ATW.Buff and ATW.Buff("player", "Ability_CriticalStrike")
+
+	-- Berserker Rage buff (fear immunity + rage gen)
+	state.hasBerserkerRage = ATW.Buff and ATW.Buff("player", "Spell_Nature_AncestralGuardian")
+
+	-- Sweeping Strikes buff (AoE)
+	state.hasSweepingStrikes = ATW.Buff and ATW.Buff("player", "Ability_Rogue_SliceDice")
+
+	-- Enrage buff (from Bloodrage or crits with talent)
+	state.hasEnrage = ATW.Buff and ATW.Buff("player", "Spell_Shadow_UnholyFrenzy")
+
+	-- Bloodrage active (DoT on self = generating rage)
+	state.hasBloodrageActive = ATW.Buff and ATW.Buff("player", "Ability_Racial_BloodRage")
+
+	---------------------------------------
+	-- INTERRUPT STATE (for Pummel)
+	---------------------------------------
+	state.shouldInterrupt = ATW.State and ATW.State.Interrupt or false
+
+	---------------------------------------
+	-- COMBAT STATE (for Charge - only works out of combat)
+	---------------------------------------
+	state.inCombat = UnitAffectingCombat("player") or false
+
+	---------------------------------------
+	-- TARGET DISTANCE (for Charge range check: 8-25 yards)
+	---------------------------------------
+	state.targetDistance = nil
+	if ATW.GetDistance then
+		state.targetDistance = ATW.GetDistance("target")
+	end
+
+	---------------------------------------
+	-- SWING QUEUE STATE (HS/Cleave already queued?)
+	---------------------------------------
+	if ATW.GetQueuedSwing then
+		local queued = ATW.GetQueuedSwing()
+		if queued == "HeroicStrike" or queued == "Heroic Strike" then
+			state.swingQueued = "hs"
+		elseif queued == "Cleave" then
+			state.swingQueued = "cleave"
+		elseif queued then
+			state.swingQueued = queued  -- Any truthy value means queued
+		end
+	elseif ATW.IsSwingQueued and ATW.IsSwingQueued() then
+		state.swingQueued = "hs"  -- Assume HS if we only know it's queued
+	end
+
+	---------------------------------------
+	-- ALWAYS check current target FIRST (most reliable)
+	-- Don't rely solely on nameplate detection
+	---------------------------------------
+	local targetGUID = nil
+	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		local _, guid = UnitExists("target")
+		targetGUID = guid
+	end
+	state.targetGUID = targetGUID
+
+	-- Get target stats directly from API (most reliable)
+	if UnitExists("target") then
+		local hp = UnitHealth("target") or 0
+		local maxHp = UnitHealthMax("target") or 1
+		state.targetHPPercent = maxHp > 0 and (hp / maxHp) * 100 or 100
+		state.targetTTD = ATW.GetTargetTTD and (ATW.GetTargetTTD() * 1000) or 30000
+		state.targetBleedImmune = ATW.IsBleedImmune and ATW.IsBleedImmune("target")
+
+		-- CRITICAL: Check Rend on target directly using standard unit API
+		-- This is the most reliable method - don't skip this!
+		state.rendOnTarget = ATW.HasRend and ATW.HasRend("target") or false
+		state.rendRemaining = 0
+
+		if state.rendOnTarget then
+			-- Get remaining duration from tracker
+			if targetGUID and ATW.GetRendRemaining then
+				state.rendRemaining = (ATW.GetRendRemaining(targetGUID) or 0) * 1000
+			end
+			-- If tracker has no info but Rend is active, assume full duration
+			if state.rendRemaining <= 0 then
+				state.rendRemaining = (ATW.GetRendDuration and ATW.GetRendDuration() or 22) * 1000
+			end
+		end
+	else
+		state.targetHPPercent = 100
+		state.targetTTD = 30000
+		state.targetBleedImmune = false
+		state.rendOnTarget = false
+		state.rendRemaining = 0
+	end
+
+	---------------------------------------
+	-- MULTI-TARGET TRACKING
+	-- Capture all enemies via nameplates
+	---------------------------------------
+	state.enemies = {}
+	state.enemyCount = 0
+	state.enemyCountMelee = 0
+	state.enemyCountWW = 0
+
+	local targetFoundInList = false
+
+	if ATW.GetEnemiesWithTTD then
+		local allEnemies = ATW.GetEnemiesWithTTD(8)
+
+		for _, enemy in ipairs(allEnemies) do
+			local hpPercent = 100
+			if enemy.hp and enemy.maxHp and enemy.maxHp > 0 then
+				hpPercent = (enemy.hp / enemy.maxHp) * 100
+			end
+
+			local isTarget = (targetGUID and enemy.guid == targetGUID)
+
+			local enemyState = {
+				guid = enemy.guid,
+				distance = enemy.distance or 5,
+				ttd = (enemy.ttd or 30) * 1000,
+				hpPercent = hpPercent,
+				bleedImmune = enemy.bleedImmune or false,
+				hasRend = enemy.hasRend or false,
+				rendRemaining = (enemy.rendRemaining or 0) * 1000,
+				isTarget = isTarget,
+				inExecute = hpPercent < 20,
+			}
+
+			-- For current target, use our direct API check (more reliable)
+			if isTarget then
+				targetFoundInList = true
+				enemyState.hasRend = state.rendOnTarget
+				enemyState.rendRemaining = state.rendRemaining
+				enemyState.hpPercent = state.targetHPPercent
+				enemyState.ttd = state.targetTTD
+				enemyState.bleedImmune = state.targetBleedImmune
+				enemyState.inExecute = state.targetHPPercent < 20
+			end
+
+			table.insert(state.enemies, enemyState)
+			state.enemyCount = state.enemyCount + 1
+
+			if enemy.distance <= 5 then
+				state.enemyCountMelee = state.enemyCountMelee + 1
+			end
+			if enemy.distance <= 8 then
+				state.enemyCountWW = state.enemyCountWW + 1
+			end
+		end
+	end
+
+	-- If target exists but wasn't in nameplate list, add it
+	if UnitExists("target") and not targetFoundInList then
+		table.insert(state.enemies, {
+			guid = targetGUID,
+			distance = 5,
+			ttd = state.targetTTD,
+			hpPercent = state.targetHPPercent,
+			bleedImmune = state.targetBleedImmune,
+			hasRend = state.rendOnTarget,
+			rendRemaining = state.rendRemaining,
+			isTarget = true,
+			inExecute = state.targetHPPercent < 20,
+		})
+		state.enemyCount = state.enemyCount + 1
+		state.enemyCountMelee = state.enemyCountMelee + 1
+		state.enemyCountWW = state.enemyCountWW + 1
+	end
+
+	return state
+end
+
+---------------------------------------
+-- Get all valid actions from current state
+-- Properly accounts for stance requirements and TM rage cap
+-- ONLY includes abilities the player has actually learned
+---------------------------------------
+function Engine.GetValidActions(state)
+	local actions = {}
+	local rage = state.rage
+	local stance = state.stance
+	local inExecute = state.targetHPPercent < 20
+
+	-- Tactical Mastery: rage retained on stance switch
+	local tm = state.tacticalMastery or (ATW.Talents and ATW.Talents.TM) or 0
+
+	-- Helper: calculate available rage after potential stance switch
+	local function rageAfterSwitch(targetStance)
+		if targetStance == stance then
+			return rage  -- No switch needed
+		end
+		return math.min(rage, tm)  -- Capped by TM
+	end
+
+	-- Helper: check if ability is usable (rage after switch >= cost)
+	local function canUse(targetStance, cost)
+		return rageAfterSwitch(targetStance) >= cost
+	end
+
+	-- Helper: check if in valid stance for ability
+	local function inStance(validStances)
+		for _, s in ipairs(validStances) do
+			if s == 0 or s == stance then return true end
+		end
+		return false
+	end
+
+	-- Helper: check if spell is learned (has rank > 0)
+	-- CRITICAL: Default to FALSE if we can't verify - prevents pooling for unlearned abilities
+	local function hasSpell(spellName)
+		-- Map internal names to ATW.Spells rank keys
+		local spellRankMap = {
+			-- Core abilities (ranked)
+			Execute = "ExecuteRank",
+			Rend = "RendRank",
+			HeroicStrike = "HeroicStrikeRank",
+			Cleave = "CleaveRank",
+			Overpower = "OverpowerRank",
+			Whirlwind = "WhirlwindRank",
+			Slam = "SlamRank",
+			Hamstring = "HamstringRank",
+			BattleShout = "BattleShoutRank",
+			-- Talent abilities
+			Bloodthirst = "BloodthirstRank",
+			MortalStrike = "MortalStrikeRank",
+			-- Utility abilities (ranked)
+			Charge = "ChargeRank",
+			Bloodrage = "BloodrageRank",
+			BerserkerRage = "BerserkerRageRank",
+			Recklessness = "RecklessnessRank",
+			DeathWish = "DeathWishRank",
+			SweepingStrikes = "SweepingStrikesRank",
+			Pummel = "PummelRank",
+		}
+
+		-- Check ATW.Spells first (most reliable)
+		if ATW.Spells then
+			local rankKey = spellRankMap[spellName]
+			if rankKey then
+				local rank = ATW.Spells[rankKey]
+				if rank ~= nil then
+					return rank > 0
+				end
+			end
+		end
+
+		-- Fallback: check if spell ID exists in spellbook
+		if ATW.SpellID then
+			-- Convert internal names to display names for spellbook lookup
+			local displayNames = {
+				BattleShout = "Battle Shout",
+				HeroicStrike = "Heroic Strike",
+				MortalStrike = "Mortal Strike",
+				BerserkerRage = "Berserker Rage",
+				DeathWish = "Death Wish",
+				SweepingStrikes = "Sweeping Strikes",
+			}
+			local displayName = displayNames[spellName] or spellName
+			local spellId = ATW.SpellID(displayName)
+			if spellId then
+				return true
+			end
+		end
+
+		-- CRITICAL: Default to FALSE - don't pool for potentially unlearned spells
+		-- This prevents the simulator from waiting for Execute when it's not learned
+		return false
+	end
+
+	---------------------------------------
+	-- CHARGE (Battle Stance, OUT OF COMBAT ONLY)
+	-- Must be used FIRST before any combat ability
+	-- Bloodrage triggers combat and blocks Charge!
+	-- Battle Shout does NOT trigger combat
+	---------------------------------------
+	if hasSpell("Charge") and not state.inCombat then
+		-- Charge range: 8-25 yards
+		local inChargeRange = state.targetDistance and state.targetDistance >= 8 and state.targetDistance <= 25
+		local chargeReady = (state.cooldowns.Charge or 0) <= 0
+		if chargeReady and inChargeRange then
+			-- Charge generates rage: 9 base + Improved Charge talent (0/3/6)
+			-- ATW.Talents.ChargeRage stores the total (9 + talent bonus)
+			local chargeRage = 9
+			if ATW.Talents and ATW.Talents.ChargeRage then
+				chargeRage = ATW.Talents.ChargeRage
+			end
+			-- Charge requires Battle Stance
+			if stance == 1 then
+				table.insert(actions, {name = "Charge", stance = 1, rage = 0, needsDance = false, rageGain = chargeRage})
+			elseif canUse(1, 0) then
+				table.insert(actions, {name = "Charge", stance = 1, rage = 0, needsDance = true, rageGain = chargeRage})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Execute (stance: Battle/Berserker, target < 20%)
+	---------------------------------------
+	if inExecute and hasSpell("Execute") then
+		local execCost = ATW.Talents and ATW.Talents.ExecCost or 15
+		-- In Battle or Berserker: can execute directly
+		if (stance == 1 or stance == 3) and rage >= execCost then
+			table.insert(actions, {name = "Execute", stance = stance, rage = execCost, needsDance = false})
+		-- In Defensive: need to dance to Berserker
+		elseif stance == 2 and canUse(3, execCost) then
+			table.insert(actions, {name = "Execute", stance = 3, rage = execCost, needsDance = true})
+		end
+	end
+
+	---------------------------------------
+	-- Bloodthirst (stance: Berserker only, 30 rage, 6s CD)
+	---------------------------------------
+	if ATW.Talents and ATW.Talents.HasBT then
+		local btCost = 30
+		local btReady = (state.cooldowns.Bloodthirst or 0) <= 0
+		if btReady then
+			if stance == 3 and rage >= btCost then
+				table.insert(actions, {name = "Bloodthirst", stance = 3, rage = btCost, needsDance = false})
+			elseif stance ~= 3 and canUse(3, btCost) then
+				table.insert(actions, {name = "Bloodthirst", stance = 3, rage = btCost, needsDance = true})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Mortal Strike (stance: Battle/Berserker, 30 rage, 6s CD)
+	-- Note: MS works in Berserker in TurtleWoW (verify this)
+	---------------------------------------
+	if ATW.Talents and ATW.Talents.HasMS then
+		local msCost = 30
+		local msReady = (state.cooldowns.MortalStrike or 0) <= 0
+		if msReady then
+			-- MS traditionally Battle stance only, but check Abilities.lua
+			if stance == 1 and rage >= msCost then
+				table.insert(actions, {name = "MortalStrike", stance = 1, rage = msCost, needsDance = false})
+			elseif stance == 3 and rage >= msCost then
+				-- Check if MS works in Berserker (TurtleWoW may allow this)
+				table.insert(actions, {name = "MortalStrike", stance = 3, rage = msCost, needsDance = false})
+			elseif stance == 2 and canUse(1, msCost) then
+				table.insert(actions, {name = "MortalStrike", stance = 1, rage = msCost, needsDance = true})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Whirlwind (stance: Berserker only, 25 rage, 10s CD)
+	---------------------------------------
+	if hasSpell("Whirlwind") then
+		local wwCost = 25
+		local wwReady = (state.cooldowns.Whirlwind or 0) <= 0
+		if wwReady then
+			if stance == 3 and rage >= wwCost then
+				table.insert(actions, {name = "Whirlwind", stance = 3, rage = wwCost, needsDance = false})
+			elseif stance ~= 3 and canUse(3, wwCost) then
+				table.insert(actions, {name = "Whirlwind", stance = 3, rage = wwCost, needsDance = true})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Overpower (stance: Battle only, 5 rage, requires dodge proc)
+	---------------------------------------
+	if hasSpell("Overpower") and state.overpowerReady and state.overpowerEnd > 0 then
+		local opCost = 5
+		local opReady = (state.cooldowns.Overpower or 0) <= 0
+		if opReady then
+			if stance == 1 and rage >= opCost then
+				table.insert(actions, {name = "Overpower", stance = 1, rage = opCost, needsDance = false})
+			elseif stance ~= 1 and canUse(1, opCost) then
+				table.insert(actions, {name = "Overpower", stance = 1, rage = opCost, needsDance = true})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Battle Shout (any stance, 10 rage)
+	---------------------------------------
+	if hasSpell("BattleShout") and not state.hasBattleShout then
+		local bsCost = 10
+		if rage >= bsCost then
+			table.insert(actions, {name = "BattleShout", stance = stance, rage = bsCost, needsDance = false})
+		end
+	end
+
+	---------------------------------------
+	-- MULTI-TARGET REND (stance: Battle/Defensive, 10 rage)
+	-- Generate Rend action for EACH enemy that needs it
+	---------------------------------------
+	local rendCost = 10
+	local rendActionsAdded = {}  -- Track which targets we added Rend for
+
+	if hasSpell("Rend") and state.enemies and table.getn(state.enemies) > 0 then
+		for _, enemy in ipairs(state.enemies) do
+			-- Skip bleed immune targets
+			if not enemy.bleedImmune and not enemy.inExecute then
+				-- Only if Rend not active or about to expire (< 3s)
+				if not enemy.hasRend or enemy.rendRemaining < 3000 then
+					-- Check if worth applying (HP% >= 30%, TTD >= 9s for 3+ ticks)
+					if enemy.hpPercent >= 30 and enemy.ttd >= 9000 then
+						-- Check melee range (5yd for Rend)
+						if enemy.distance <= 5 then
+							-- Add Rend action for this specific target
+							if (stance == 1 or stance == 2) and rage >= rendCost then
+								table.insert(actions, {
+									name = "Rend",
+									stance = stance,
+									rage = rendCost,
+									needsDance = false,
+									targetGUID = enemy.guid,
+									targetTTD = enemy.ttd,
+									targetHP = enemy.hpPercent,
+									isMainTarget = enemy.isTarget,
+								})
+								rendActionsAdded[enemy.guid] = true
+							elseif stance == 3 and canUse(1, rendCost) then
+								table.insert(actions, {
+									name = "Rend",
+									stance = 1,
+									rage = rendCost,
+									needsDance = true,
+									targetGUID = enemy.guid,
+									targetTTD = enemy.ttd,
+									targetHP = enemy.hpPercent,
+									isMainTarget = enemy.isTarget,
+								})
+								rendActionsAdded[enemy.guid] = true
+							end
+						end
+					end
+				end
+			end
+		end
+	elseif hasSpell("Rend") then
+		-- Fallback: Single target mode (no enemy list available)
+		if not state.targetBleedImmune and not inExecute then
+			if not state.rendOnTarget or state.rendRemaining < 3000 then
+				if state.targetHPPercent >= 30 and state.targetTTD >= 9000 then
+					if (stance == 1 or stance == 2) and rage >= rendCost then
+						table.insert(actions, {name = "Rend", stance = stance, rage = rendCost, needsDance = false})
+					elseif stance == 3 and canUse(1, rendCost) then
+						table.insert(actions, {name = "Rend", stance = 1, rage = rendCost, needsDance = true})
+					end
+				end
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Slam (any stance, 15 rage, resets swing timer)
+	-- Good filler when BT/WW on CD - ONLY with 2H weapon (no offhand)
+	---------------------------------------
+	if hasSpell("Slam") and not state.hasOH then
+		local slamCost = 15
+		local slamReady = (state.cooldowns.Slam or 0) <= 0
+		if slamReady and rage >= slamCost then
+			table.insert(actions, {name = "Slam", stance = stance, rage = slamCost, needsDance = false})
+		end
+	end
+
+	---------------------------------------
+	-- Heroic Strike (any stance, off-GCD)
+	-- NO THRESHOLD - let the simulation decide optimal rage management
+	-- The 6s lookahead naturally handles "save rage for BT" decisions
+	---------------------------------------
+	if hasSpell("HeroicStrike") then
+		local hsCost = ATW.GetHeroicStrikeCost and ATW.GetHeroicStrikeCost() or 15
+		-- Simple check: have rage and not already queued
+		-- The simulation compares HS damage vs saving rage for other abilities
+		if rage >= hsCost and not state.swingQueued then
+			table.insert(actions, {name = "HeroicStrike", stance = stance, rage = hsCost, needsDance = false, offGCD = true})
+		end
+	end
+
+	---------------------------------------
+	-- Cleave (any stance, off-GCD, 2+ targets)
+	-- NO THRESHOLD - let the simulation decide optimal rage management
+	---------------------------------------
+	if hasSpell("Cleave") then
+		local numMeleeTargets = state.enemyCountMelee or 1
+		local cleaveCost = 20
+		-- Simple check: 2+ targets, have rage, not already queued
+		if numMeleeTargets >= 2 and rage >= cleaveCost and not state.swingQueued then
+			table.insert(actions, {name = "Cleave", stance = stance, rage = cleaveCost, needsDance = false, offGCD = true})
+		end
+	end
+
+	---------------------------------------
+	-- Bloodrage (any stance, OFF-GCD, generates rage)
+	-- Critical for rage generation at pull and during combat
+	---------------------------------------
+	if hasSpell("Bloodrage") then
+		local bloodrageReady = (state.cooldowns.Bloodrage or 0) <= 0
+		if bloodrageReady and not state.hasBloodrageActive then
+			-- Only use if HP is decent (Bloodrage costs HP)
+			local playerHP = ATW.GetHealthPercent and ATW.GetHealthPercent() or 100
+			if playerHP >= 50 then
+				table.insert(actions, {name = "Bloodrage", stance = stance, rage = 0, needsDance = false, offGCD = true})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Berserker Rage (Berserker only, OFF-GCD)
+	-- Fear break + rage from damage with Improved BR talent
+	---------------------------------------
+	if hasSpell("BerserkerRage") and ATW.Talents and ATW.Talents.HasIBR then
+		local brReady = (state.cooldowns.BerserkerRage or 0) <= 0
+		if brReady and not state.hasBerserkerRage then
+			if stance == 3 then
+				table.insert(actions, {name = "BerserkerRage", stance = 3, rage = 0, needsDance = false, offGCD = true})
+			elseif canUse(3, 0) then
+				-- Can dance to Berserker for this
+				table.insert(actions, {name = "BerserkerRage", stance = 3, rage = 0, needsDance = true, offGCD = true})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Death Wish (any stance, OFF-GCD, +20% damage)
+	-- Major DPS cooldown - use when available
+	---------------------------------------
+	if ATW.Talents and ATW.Talents.HasDW then
+		local dwReady = (state.cooldowns.DeathWish or 0) <= 0
+		local dwCost = 10
+		if dwReady and not state.hasDeathWish and rage >= dwCost then
+			table.insert(actions, {name = "DeathWish", stance = stance, rage = dwCost, needsDance = false, offGCD = true})
+		end
+	end
+
+	---------------------------------------
+	-- Recklessness (Berserker only, OFF-GCD, +100% crit)
+	-- Major cooldown - use carefully
+	---------------------------------------
+	if hasSpell("Recklessness") and ATW.AvailableStances and ATW.AvailableStances[3] then
+		local reckReady = (state.cooldowns.Recklessness or 0) <= 0
+		if reckReady and not state.hasRecklessness then
+			if stance == 3 then
+				table.insert(actions, {name = "Recklessness", stance = 3, rage = 0, needsDance = false, offGCD = true})
+			-- Don't dance just for Recklessness - it's a long CD
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Sweeping Strikes (Battle only, 2+ targets)
+	-- AoE damage buff - next 5 attacks hit additional target
+	---------------------------------------
+	local numMeleeTargets = state.enemyCountMelee or 1
+	if hasSpell("SweepingStrikes") and numMeleeTargets >= 2 then
+		local ssReady = (state.cooldowns.SweepingStrikes or 0) <= 0
+		local ssCost = 30
+		if ssReady and not state.hasSweepingStrikes then
+			if stance == 1 and rage >= ssCost then
+				table.insert(actions, {name = "SweepingStrikes", stance = 1, rage = ssCost, needsDance = false})
+			elseif stance ~= 1 and canUse(1, ssCost) then
+				table.insert(actions, {name = "SweepingStrikes", stance = 1, rage = ssCost, needsDance = true})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Pummel (Battle/Berserker, OFF-GCD interrupt)
+	-- Only when interrupt is needed
+	---------------------------------------
+	if hasSpell("Pummel") and state.shouldInterrupt then
+		local pummelReady = (state.cooldowns.Pummel or 0) <= 0
+		local pummelCost = 10
+		if pummelReady and rage >= pummelCost then
+			if stance == 1 or stance == 3 then
+				table.insert(actions, {name = "Pummel", stance = stance, rage = pummelCost, needsDance = false, offGCD = true})
+			elseif canUse(3, pummelCost) then
+				table.insert(actions, {name = "Pummel", stance = 3, rage = pummelCost, needsDance = true, offGCD = true})
+			end
+		end
+	end
+
+	---------------------------------------
+	-- Wait (always valid - for rage pooling)
+	---------------------------------------
+	table.insert(actions, {name = "Wait", stance = stance, rage = 0, needsDance = false})
+
+	return actions
+end
+
+---------------------------------------
+-- Calculate damage for an action
+-- Returns expected damage (includes crit expectation)
+---------------------------------------
+function Engine.GetActionDamage(state, action)
+	local ap = state.ap or 1000
+
+	-- If Battle Shout is active, add its AP
+	if state.hasBattleShout then
+		ap = ap + (ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or 232)
+	end
+
+	-- Calculate effective crit chance based on RESULTING stance
+	-- Berserker Stance: +3% crit
+	-- Battle/Defensive: no modifier
+	local baseCrit = state.crit or 20
+	local stanceAfterAction = action.needsDance and action.stance or state.stance
+	local stanceCritBonus = 0
+	if stanceAfterAction == 3 then  -- Berserker
+		stanceCritBonus = 3
+	end
+	local effectiveCrit = baseCrit + stanceCritBonus
+
+	-- Crit multiplier from Impale talent (10/20% bonus crit damage)
+	-- Base crit = 2x damage, with Impale = 2.1x or 2.2x
+	local impale = ATW.Talents and ATW.Talents.Impale or 0  -- 0/10/20
+	local critMultiplier = 2.0 + (impale / 100)
+
+	-- Expected damage multiplier from crit
+	-- E[dmg] = baseDmg * (1 + critChance * (critMult - 1))
+	local critExpectedMult = 1 + (effectiveCrit / 100) * (critMultiplier - 1)
+
+	local damage = 0
+	local canCrit = true  -- Most abilities can crit
+
+	if action.name == "Execute" then
+		local base = ATW.GetExecuteBase and ATW.GetExecuteBase() or 600
+		local coeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or 15
+		-- Execute uses rage BEFORE TM cap if dancing
+		local availableRage = state.rage
+		if action.needsDance then
+			local tm = state.tacticalMastery or 0
+			availableRage = math.min(state.rage, tm)
+		end
+		local execCost = ATW.Talents and ATW.Talents.ExecCost or 15
+		local excess = math.max(0, availableRage - execCost)
+		damage = base + (excess * coeff)
+
+	elseif action.name == "Bloodthirst" then
+		damage = ATW.GetBloodthirstDamage and ATW.GetBloodthirstDamage(ap) or (200 + ap * 0.35)
+
+	elseif action.name == "MortalStrike" then
+		local bonus = ATW.GetMortalStrikeBonus and ATW.GetMortalStrikeBonus() or 120
+		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		damage = weaponDmg + bonus
+
+	elseif action.name == "Whirlwind" then
+		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		-- Use state.enemyCountWW (8yd range) from CaptureCurrentState
+		local targetsHit = math.min(4, state.enemyCountWW or 1)
+		if targetsHit < 1 then targetsHit = 1 end
+		damage = weaponDmg * targetsHit
+
+	elseif action.name == "Overpower" then
+		local bonus = ATW.GetOverpowerBonus and ATW.GetOverpowerBonus() or 35
+		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		damage = weaponDmg + bonus
+		-- Overpower has +25/50% crit from Improved Overpower talent
+		-- This is ON TOP of the stance crit bonus
+		local opCritBonus = ATW.Talents and ATW.Talents.OPCrit or 0
+		-- Overpower uses Battle Stance (no stance crit bonus)
+		local opCrit = baseCrit + opCritBonus  -- No berserker bonus since it's Battle stance
+		critExpectedMult = 1 + (opCrit / 100) * (critMultiplier - 1)
+
+	elseif action.name == "Slam" then
+		-- Slam: weapon damage + bonus, resets swing timer
+		local bonus = ATW.GetSlamBonus and ATW.GetSlamBonus() or 87
+		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		damage = weaponDmg + bonus
+
+	elseif action.name == "Charge" then
+		-- Charge doesn't deal damage but generates free rage
+		-- Value = rage gained converted to damage potential
+		-- Rough estimate: rage * damage_per_rage (from Execute formula)
+		-- 1 rage = ~15 damage via Execute, but much less normally
+		-- Conservative: value as the AP-equivalent of having that rage for BT/WW
+		local rageGain = action.rageGain or 9
+		-- Value each rage point at ~5 damage (conservative estimate)
+		-- This makes Charge worth ~45-75 "damage" for priority calculation
+		damage = rageGain * 5
+		canCrit = false
+
+	elseif action.name == "BattleShout" then
+		-- Battle Shout doesn't deal direct damage, but its AP boost
+		-- is valuable. Calculate the AP benefit over the fight:
+		-- ~232 AP for 2 minutes = significant damage increase
+		-- Estimate: 232 AP * 0.35 (BT coeff) * ~10 BT casts = ~800 damage value
+		-- But this is spread over time, so divide by horizon
+		local bsAP = ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or 232
+		local horizonSec = Engine.DECISION_HORIZON / 1000
+		local gcdsInHorizon = horizonSec / 1.5
+		-- Rough value: AP bonus * ability coefficient * casts
+		damage = bsAP * 0.35 * gcdsInHorizon * 0.5  -- Conservative estimate
+		canCrit = false
+
+	elseif action.name == "Rend" then
+		-- Rend DoT - cannot crit
+		-- Calculate damage based on TARGET-SPECIFIC TTD if available
+		local tickDamage = ATW.GetRendTickDamage and ATW.GetRendTickDamage() or 33
+		local maxTicks = ATW.GetRendTicks and ATW.GetRendTicks() or 7
+		local apPerTick = ap * 0.05
+		local tickTotal = tickDamage + apPerTick
+
+		-- Use target-specific TTD if this is a multi-target Rend action
+		local targetTTD = action.targetTTD or state.targetTTD or 30000
+		local tickInterval = 3000  -- 3 seconds per tick
+		local ticksFromTTD = math.floor(targetTTD / tickInterval)
+		local numTicks = math.min(maxTicks, ticksFromTTD)
+		if numTicks < 1 then numTicks = 1 end
+
+		damage = tickTotal * numTicks
+		canCrit = false  -- DoTs don't crit in vanilla
+
+	elseif action.name == "HeroicStrike" then
+		local bonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or 157
+		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		damage = weaponDmg + bonus
+
+	elseif action.name == "Cleave" then
+		local bonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or 50
+		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		-- Use state.enemyCountMelee (5yd range) from CaptureCurrentState
+		local targetsHit = math.min(2, state.enemyCountMelee or 1)
+		if targetsHit < 1 then targetsHit = 1 end
+		damage = (weaponDmg + bonus) * targetsHit
+
+	elseif action.name == "Wait" then
+		damage = 0
+		canCrit = false
+
+	---------------------------------------
+	-- BUFF/UTILITY ABILITIES
+	-- These don't deal direct damage but have strategic value
+	---------------------------------------
+	elseif action.name == "Bloodrage" then
+		-- Bloodrage generates rage (20 total: 10 instant + 10 over time)
+		-- In TurtleWoW it also triggers Enrage talent
+		-- Value = rage generated * expected damage per rage
+		local rageGen = 20
+		local avgDmgPerRage = 25  -- Rough estimate
+		damage = rageGen * avgDmgPerRage * 0.3  -- Discounted value
+		canCrit = false
+
+	elseif action.name == "BerserkerRage" then
+		-- Berserker Rage: fear immunity + extra rage from damage taken
+		-- Strategic value but no direct damage
+		damage = 50  -- Small value to not be ignored
+		canCrit = false
+
+	elseif action.name == "DeathWish" then
+		-- Death Wish: +20% damage for 30s
+		-- Value = expected damage increase over duration
+		local horizonSec = Engine.DECISION_HORIZON / 1000
+		local avgDmgPerSec = 500  -- Rough estimate
+		damage = avgDmgPerSec * horizonSec * 0.20 * 0.5  -- 20% increase, discounted
+		canCrit = false
+
+	elseif action.name == "Recklessness" then
+		-- Recklessness: +100% crit for 15s
+		-- Massive DPS increase - high value
+		local horizonSec = math.min(15, Engine.DECISION_HORIZON / 1000)
+		local avgDmgPerSec = 500
+		-- Estimate: doubles crit rate, crit does 2x damage, so ~50% more damage
+		damage = avgDmgPerSec * horizonSec * 0.50 * 0.5  -- 50% increase, discounted
+		canCrit = false
+
+	elseif action.name == "SweepingStrikes" then
+		-- Sweeping Strikes: next 5 attacks hit additional target
+		-- Value depends on number of targets
+		local numTargets = state.enemyCountMelee or 1
+		if numTargets >= 2 then
+			local avgWeaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+			-- 5 extra hits on secondary target
+			damage = avgWeaponDmg * 5 * 0.5  -- Discounted
+		else
+			damage = 0
+		end
+		canCrit = false
+
+	elseif action.name == "Pummel" then
+		-- Pummel: interrupt + small damage (5% AP in TurtleWoW)
+		damage = ap * 0.05
+		-- Interrupt value is strategic, not damage-based
+		-- Add bonus value when interrupt is needed
+		if state.shouldInterrupt then
+			damage = damage + 500  -- High priority when needed
+		end
+	end
+
+	-- Apply crit expected value (for abilities that can crit)
+	if canCrit and damage > 0 then
+		damage = damage * critExpectedMult
+	end
+
+	-- Apply damage modifiers (Enrage, Death Wish, Recklessness)
+	local dmgMod = 1.0
+	if state.buffs.Enrage or state.hasEnrage then dmgMod = dmgMod * 1.15 end
+	if state.buffs.DeathWish or state.hasDeathWish then dmgMod = dmgMod * 1.20 end
+	-- Recklessness doesn't increase damage directly, it increases crit
+
+	-- Defensive Stance: -10% damage dealt
+	if stanceAfterAction == 2 then
+		dmgMod = dmgMod * 0.90
+	end
+
+	return damage * dmgMod
+end
+
+---------------------------------------
+-- Apply action to state, returning new state
+---------------------------------------
+function Engine.ApplyAction(state, action)
+	local newState = Engine.DeepCopyState(state)
+	local gcd = Engine.DECISION_GCD
+
+	-- STANCE SWITCH FIRST (if needed)
+	-- In vanilla, stance switch happens BEFORE ability cast
+	-- Rage is capped by Tactical Mastery on switch
+	if action.needsDance then
+		local tm = newState.tacticalMastery or 0
+		-- Cap rage at TM value
+		if newState.rage > tm then
+			newState.rage = tm
+		end
+		newState.stance = action.stance
+	end
+
+	-- THEN pay rage cost (after potential TM cap)
+	newState.rage = newState.rage - action.rage
+
+	-- Apply ability-specific effects
+	-- NOTE: Most offensive abilities set inCombat = true to prevent Charge after use
+	if action.name == "Execute" then
+		-- Execute consumes ALL rage (base cost already paid above)
+		-- The excess rage was converted to damage in GetActionDamage
+		newState.rage = 0
+		newState.inCombat = true
+
+	elseif action.name == "Bloodthirst" then
+		newState.cooldowns.Bloodthirst = 6000  -- 6s CD
+		newState.inCombat = true
+
+	elseif action.name == "MortalStrike" then
+		newState.cooldowns.MortalStrike = 6000
+		newState.inCombat = true
+
+	elseif action.name == "Whirlwind" then
+		newState.cooldowns.Whirlwind = 10000  -- 10s CD
+		newState.inCombat = true
+
+	elseif action.name == "Overpower" then
+		newState.cooldowns.Overpower = 5000
+		newState.overpowerReady = false
+		newState.overpowerEnd = 0
+		newState.inCombat = true
+
+	elseif action.name == "Slam" then
+		-- Slam resets swing timer (penalty for using it)
+		-- No cooldown, but costs a GCD and delays next auto
+		newState.mhTimer = newState.mhSpeed  -- Reset MH swing timer
+		newState.inCombat = true
+
+	elseif action.name == "Charge" then
+		-- Charge enters combat and generates rage
+		newState.inCombat = true  -- Now in combat - Charge becomes unavailable
+		newState.cooldowns.Charge = 15000  -- 15s CD
+		-- Add rage gain (already calculated in action)
+		local rageGain = action.rageGain or 9
+		newState.rage = math.min(100, newState.rage + rageGain)
+
+	elseif action.name == "BattleShout" then
+		newState.hasBattleShout = true
+		-- AP will be added in GetActionDamage for subsequent abilities
+
+	elseif action.name == "Rend" then
+		-- MULTI-TARGET REND: Update specific enemy's state if targetGUID provided
+		local rendDuration = (ATW.GetRendDuration and ATW.GetRendDuration() or 22) * 1000
+		newState.inCombat = true
+
+		if action.targetGUID and newState.enemies then
+			-- Find and update the specific enemy
+			for _, enemy in ipairs(newState.enemies) do
+				if enemy.guid == action.targetGUID then
+					enemy.hasRend = true
+					enemy.rendRemaining = rendDuration
+					-- Also update main target state if this is the main target
+					if enemy.isTarget then
+						newState.rendOnTarget = true
+						newState.rendRemaining = rendDuration
+					end
+					break
+				end
+			end
+		else
+			-- Fallback: Single target mode
+			newState.rendOnTarget = true
+			newState.rendRemaining = rendDuration
+		end
+
+	---------------------------------------
+	-- BUFF/UTILITY ABILITY EFFECTS
+	---------------------------------------
+	elseif action.name == "Bloodrage" then
+		newState.cooldowns.Bloodrage = 60000  -- 60s CD
+		newState.hasBloodrageActive = true
+		newState.hasEnrage = true  -- Bloodrage triggers Enrage in TurtleWoW
+		newState.inCombat = true  -- Bloodrage ENTERS COMBAT - blocks Charge!
+		-- Generate instant rage (10 instant, 10 over time handled by rage gen)
+		newState.rage = math.min(100, newState.rage + 10)
+
+	elseif action.name == "BerserkerRage" then
+		newState.cooldowns.BerserkerRage = 30000  -- 30s CD
+		newState.hasBerserkerRage = true
+
+	elseif action.name == "DeathWish" then
+		newState.cooldowns.DeathWish = 180000  -- 3 min CD
+		newState.hasDeathWish = true
+
+	elseif action.name == "Recklessness" then
+		newState.cooldowns.Recklessness = 1800000  -- 30 min CD
+		newState.hasRecklessness = true
+
+	elseif action.name == "SweepingStrikes" then
+		newState.cooldowns.SweepingStrikes = 30000  -- 30s CD
+		newState.hasSweepingStrikes = true
+		newState.sweepingCharges = 5  -- 5 charges
+
+	elseif action.name == "Pummel" then
+		newState.cooldowns.Pummel = 10000  -- 10s CD
+		newState.shouldInterrupt = false  -- Interrupt consumed
+		newState.inCombat = true
+	end
+
+	-- Advance time (except for off-GCD abilities)
+	if not action.offGCD then
+		newState.time = (newState.time or 0) + gcd
+
+		-- Advance cooldowns
+		for cd, remaining in pairs(newState.cooldowns) do
+			if remaining > 0 then
+				newState.cooldowns[cd] = math.max(0, remaining - gcd)
+			end
+		end
+
+		-- Decay Overpower window
+		if newState.overpowerEnd > 0 then
+			newState.overpowerEnd = math.max(0, newState.overpowerEnd - gcd)
+			if newState.overpowerEnd <= 0 then
+				newState.overpowerReady = false
+			end
+		end
+
+		-- Decay Rend on MAIN target (backwards compatibility)
+		if newState.rendRemaining > 0 then
+			newState.rendRemaining = math.max(0, newState.rendRemaining - gcd)
+			if newState.rendRemaining <= 0 then
+				newState.rendOnTarget = false
+			end
+		end
+
+		-- Decay Rend on ALL tracked enemies
+		if newState.enemies then
+			for _, enemy in ipairs(newState.enemies) do
+				if enemy.rendRemaining > 0 then
+					enemy.rendRemaining = math.max(0, enemy.rendRemaining - gcd)
+					if enemy.rendRemaining <= 0 then
+						enemy.hasRend = false
+					end
+				end
+				-- Also decay enemy HP based on their individual TTD
+				if enemy.ttd > 0 then
+					local hpDecay = (gcd / enemy.ttd) * 100
+					enemy.hpPercent = math.max(0, enemy.hpPercent - hpDecay)
+					enemy.inExecute = enemy.hpPercent < 20
+				end
+			end
+		end
+
+		-- Generate rage from auto-attacks (rough estimate)
+		-- ~15 rage per 1.5s GCD from dual wield auto-attacks
+		local ragePerGCD = 15
+		if not newState.hasOH then
+			ragePerGCD = 10  -- Less rage with 2H
+		end
+		newState.rage = math.min(100, newState.rage + ragePerGCD)
+
+		-- Decay target HP (main target)
+		if newState.targetTTD > 0 then
+			local hpDecay = (gcd / newState.targetTTD) * 100
+			newState.targetHPPercent = math.max(0, newState.targetHPPercent - hpDecay)
+		end
+	end
+
+	return newState
+end
+
+---------------------------------------
+-- Simulate N milliseconds with forced first action
+-- Uses greedy selection for subsequent actions
+-- Returns total damage dealt
+---------------------------------------
+function Engine.SimulateDecisionHorizon(state, firstAction, horizon)
+	local simState = Engine.DeepCopyState(state)
+	local totalDamage = 0
+	local gcd = Engine.DECISION_GCD
+	local timeElapsed = 0
+
+	-- Execute first action
+	local damage = Engine.GetActionDamage(simState, firstAction)
+	totalDamage = totalDamage + damage
+	simState = Engine.ApplyAction(simState, firstAction)
+
+	if not firstAction.offGCD then
+		timeElapsed = timeElapsed + gcd
+	end
+
+	-- Simulate remaining time with greedy best action
+	while timeElapsed < horizon do
+		-- Get valid actions for current state
+		local actions = Engine.GetValidActions(simState)
+
+		-- Find best action (greedy by immediate damage)
+		local bestAction = nil
+		local bestDamage = -1
+
+		for _, action in ipairs(actions) do
+			local dmg = Engine.GetActionDamage(simState, action)
+			if dmg > bestDamage then
+				bestDamage = dmg
+				bestAction = action
+			end
+		end
+
+		if not bestAction then
+			break
+		end
+
+		-- Execute greedy action
+		totalDamage = totalDamage + bestDamage
+		simState = Engine.ApplyAction(simState, bestAction)
+
+		if not bestAction.offGCD then
+			timeElapsed = timeElapsed + gcd
+		else
+			-- Prevent infinite loop on off-GCD spam
+			timeElapsed = timeElapsed + 100
+		end
+	end
+
+	return totalDamage
+end
+
+---------------------------------------
+-- Main decision function: Simulate all
+-- valid actions and return the best one
+---------------------------------------
+function Engine.GetBestAction()
+	local state = Engine.CaptureCurrentState()
+	local actions = Engine.GetValidActions(state)
+	local horizon = Engine.DECISION_HORIZON
+
+	local bestAction = nil
+	local bestDamage = -1
+	local results = {}  -- For debugging
+
+	for _, action in ipairs(actions) do
+		local totalDamage = Engine.SimulateDecisionHorizon(state, action, horizon)
+
+		-- Store result for debugging
+		table.insert(results, {
+			name = action.name,
+			damage = totalDamage,
+			needsDance = action.needsDance,
+			targetGUID = action.targetGUID,
+			targetHP = action.targetHP,
+		})
+
+		if totalDamage > bestDamage then
+			bestDamage = totalDamage
+			bestAction = action
+		end
+	end
+
+	-- Store last decision results for debugging
+	Engine.lastDecisionResults = results
+	Engine.lastBestAction = bestAction
+
+	return bestAction, bestDamage, results
+end
+
+---------------------------------------
+-- NEW GetRecommendation using simulator
+-- Returns: abilityName (internal), isOffGCD, pooling, timeToExecute, targetGUID, targetStance
+---------------------------------------
+function Engine.GetRecommendationSimBased()
+	local bestAction, bestDamage, results = Engine.GetBestAction()
+
+	if not bestAction or bestAction.name == "Wait" then
+		return nil, false, false, 0, nil, nil
+	end
+
+	local targetStance = nil
+	if bestAction.needsDance then
+		targetStance = bestAction.stance
+	end
+
+	-- For multi-target Rend, return the specific targetGUID
+	local targetGUID = bestAction.targetGUID or nil
+
+	-- Return INTERNAL name (e.g., "BattleShout" not "Battle Shout")
+	-- The Rotation.lua looks up ATW.Abilities[abilityName] which uses internal names
+	return bestAction.name, bestAction.offGCD or false, false, 0, targetGUID, targetStance
+end
+
+---------------------------------------
+-- Debug: Print decision comparison
+---------------------------------------
+function Engine.PrintDecisionDebug()
+	local bestAction, bestDamage, results = Engine.GetBestAction()
+
+	ATW.Print("=== Decision Simulator ===")
+	ATW.Print("Horizon: " .. (Engine.DECISION_HORIZON / 1000) .. "s")
+	ATW.Print("")
+
+	-- Sort by damage descending
+	table.sort(results, function(a, b) return a.damage > b.damage end)
+
+	ATW.Print("Action comparison:")
+	for _, r in ipairs(results) do
+		local marker = ""
+		if bestAction and r.name == bestAction.name then
+			marker = " |cff00ff00<< BEST|r"
+		end
+		local danceStr = r.needsDance and " (dance)" or ""
+		local targetStr = r.targetGUID and " [GUID]" or ""
+		ATW.Print("  " .. r.name .. danceStr .. targetStr .. ": " ..
+			string.format("%.0f", r.damage) .. " dmg" .. marker)
+	end
+
+	-- Show current state info
+	local state = Engine.CaptureCurrentState()
+	ATW.Print("")
+	ATW.Print("Current state:")
+	ATW.Print("  Rage: " .. state.rage)
+	ATW.Print("  Stance: " .. state.stance)
+	ATW.Print("  Battle Shout: " .. (state.hasBattleShout and "YES" or "NO"))
+	ATW.Print("  Rend (target): " .. (state.rendOnTarget and "YES" or "NO"))
+	ATW.Print("  Overpower: " .. (state.overpowerReady and ("YES (" .. string.format("%.1f", state.overpowerEnd/1000) .. "s)") or "NO"))
+	ATW.Print("  Target HP: " .. string.format("%.1f", state.targetHPPercent) .. "%")
+
+	-- Multi-target info
+	if state.enemies and table.getn(state.enemies) > 0 then
+		ATW.Print("")
+		ATW.Print("Multi-target (" .. state.enemyCount .. " enemies):")
+		ATW.Print("  Melee range (5yd): " .. (state.enemyCountMelee or 0))
+		ATW.Print("  WW range (8yd): " .. (state.enemyCountWW or 0))
+
+		local rendedCount = 0
+		local needsRendCount = 0
+		for _, enemy in ipairs(state.enemies) do
+			if enemy.hasRend then
+				rendedCount = rendedCount + 1
+			elseif not enemy.bleedImmune and not enemy.inExecute and enemy.hpPercent >= 30 then
+				needsRendCount = needsRendCount + 1
+			end
+		end
+		ATW.Print("  Rended: " .. rendedCount .. "/" .. state.enemyCount)
+		ATW.Print("  Needs Rend: " .. needsRendCount)
 	end
 end

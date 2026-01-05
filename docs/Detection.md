@@ -299,9 +299,11 @@ end
 
 | Range | Use |
 |-------|-----|
-| 5 yards | Melee range (Rend, HS) |
-| 8 yards | Whirlwind range |
-| 25 yards | Charge max range |
+| 5 yards | Melee range (Rend, HS, Execute) |
+| 8 yards | Whirlwind range, Charge minimum |
+| 25 yards | Charge maximum |
+
+**Charge Range**: Charge requires 8-25 yards - too close and it won't work, too far and you're out of range.
 
 ## Stance Detection
 

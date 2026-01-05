@@ -1,6 +1,18 @@
 --[[
 	Auto Turtle Warrior - Sim/Simulator
-	Hekili-like DPR-based priority simulation
+	100% SIMULATION-BASED decision engine (Zebouski-style)
+
+	Decision making is handled entirely by Engine.lua:
+	- CaptureCurrentState(): Gets current combat state (multi-target)
+	- GetValidActions(): Lists all possible actions from current state
+	- GetActionDamage(): Calculates expected damage for each action
+	- SimulateDecisionHorizon(): Simulates 6s forward with each first action
+	- GetBestAction(): Compares all actions, returns highest damage option
+
+	NO HARDCODED PRIORITIES - everything is computed via simulation.
+
+	Legacy DPR functions below are kept for compatibility but NOT USED
+	for decision making. See Engine.lua for the actual simulation logic.
 ]]--
 
 ATW.Sim = {
@@ -235,6 +247,24 @@ function ATW.GetPriorityList()
 						dpr = dpr * 2
 					end
 
+					-- Overpower has limited window (4s), boost priority when active
+					-- Higher boost if window is about to expire
+					if abilityName == "Overpower" and ATW.State.Overpower then
+						local windowRemaining = 4 - (GetTime() - ATW.State.Overpower)
+						if windowRemaining > 0 then
+							if windowRemaining <= 1.5 then
+								-- Window about to expire - very high priority
+								dpr = dpr * 3
+							elseif windowRemaining <= 2.5 then
+								-- Window closing soon - high priority
+								dpr = dpr * 2
+							else
+								-- Window open - moderate boost
+								dpr = dpr * 1.5
+							end
+						end
+					end
+
 					-- Whirlwind scales with targets
 					if abilityName == "Whirlwind" and enemyCount > 1 then
 						-- Already calculated in damage function
@@ -353,60 +383,62 @@ end
 ---------------------------------------
 -- Get next recommended ability
 -- Returns: abilityName, needsDance, targetStance, targetGUID
--- Uses Engine.GetRecommendation() for full simulation
--- Falls back to DPR priority if Engine unavailable
+-- 100% SIMULATION-BASED - Uses Engine.GetRecommendation()
+-- NO FALLBACK to legacy priority systems
 ---------------------------------------
 function ATW.GetNextAbility()
-	-- Try to use the full Engine simulation first
-	if ATW.Engine and ATW.Engine.GetRecommendation then
-		local ok, abilityName, isOffGCD, pooling, timeToExecute, targetGUID, engineTargetStance = pcall(ATW.Engine.GetRecommendation)
-		if ok and abilityName then
-			-- Check if we need stance dance
-			local ability = ATW.Abilities[abilityName]
-			local needsDance = false
-			local targetStance = engineTargetStance  -- Use Engine's recommendation first
-
-			if ability and ability.stance and ability.stance[1] ~= 0 then
-				local currentStance = ATW.Stance()
-				local validStance = false
-				for _, s in ipairs(ability.stance) do
-					if s == currentStance then
-						validStance = true
-						break
-					end
-				end
-				if not validStance then
-					needsDance = true
-					-- Use Engine's targetStance if provided, otherwise find one
-					if not targetStance then
-						for _, s in ipairs(ability.stance) do
-							if ATW.AvailableStances and ATW.AvailableStances[s] then
-								targetStance = s
-								break
-							end
-						end
-					end
-				end
-			end
-
-			-- Debug info about pooling
-			if pooling and AutoTurtleWarrior_Config.Debug then
-				ATW.Debug("Pooling rage for Execute in " .. string.format("%.1f", timeToExecute) .. "s")
-			end
-
-			return abilityName, needsDance, targetStance, targetGUID
-		end
-	end
-
-	-- Fallback: use DPR priority list
-	local priorities = ATW.GetPriorityList()
-
-	if table.getn(priorities) == 0 then
+	-- Engine simulation is REQUIRED - no fallback
+	if not ATW.Engine or not ATW.Engine.GetRecommendation then
+		ATW.Debug("ERROR: Engine.GetRecommendation not available!")
 		return nil
 	end
 
-	local best = priorities[1]
-	return best.name, best.needsDance, best.targetStance, nil
+	local ok, abilityName, isOffGCD, pooling, timeToExecute, targetGUID, engineTargetStance = pcall(ATW.Engine.GetRecommendation)
+
+	if not ok then
+		ATW.Debug("ERROR: Engine.GetRecommendation failed: " .. tostring(abilityName))
+		return nil
+	end
+
+	if not abilityName then
+		-- No ability recommended (waiting/pooling)
+		return nil
+	end
+
+	-- Check if we need stance dance
+	local ability = ATW.Abilities[abilityName]
+	local needsDance = false
+	local targetStance = engineTargetStance  -- Use Engine's recommendation
+
+	if ability and ability.stance and ability.stance[1] ~= 0 then
+		local currentStance = ATW.Stance()
+		local validStance = false
+		for _, s in ipairs(ability.stance) do
+			if s == currentStance then
+				validStance = true
+				break
+			end
+		end
+		if not validStance then
+			needsDance = true
+			-- Use Engine's targetStance if provided, otherwise find one
+			if not targetStance then
+				for _, s in ipairs(ability.stance) do
+					if ATW.AvailableStances and ATW.AvailableStances[s] then
+						targetStance = s
+						break
+					end
+				end
+			end
+		end
+	end
+
+	-- Debug info about pooling
+	if pooling and AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+		ATW.Debug("Pooling rage for Execute in " .. string.format("%.1f", timeToExecute or 0) .. "s")
+	end
+
+	return abilityName, needsDance, targetStance, targetGUID
 end
 
 ---------------------------------------

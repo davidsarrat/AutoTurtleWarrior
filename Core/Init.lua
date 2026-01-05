@@ -17,7 +17,6 @@ ATW.DEFAULT = {
 	PrimaryStance = 0,  -- 0 = auto-detect (Berserker if available, else Battle)
 	DanceRage = 10,
 	MaxRage = 60,
-	HSRage = 50,
 	AoE = "auto",
 	AoECount = 3,
 	WWRange = 8,

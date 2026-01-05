@@ -30,8 +30,11 @@ Abilities.Bloodthirst = {
 	gcd = true,
 	isCooldown = false,
 	damage = function(stats)
-		-- TurtleWoW: AP * 0.45
-		return stats.AP * 0.45
+		-- TurtleWoW: 200 + AP * 0.35 (from Zebouski)
+		if ATW.GetBloodthirstDamage then
+			return ATW.GetBloodthirstDamage(stats.AP)
+		end
+		return 200 + (stats.AP * 0.35)
 	end,
 	condition = function(state)
 		-- Need Berserker Stance and the talent
@@ -77,11 +80,14 @@ Abilities.Execute = {
 	gcd = true,
 	isCooldown = false,
 	damage = function(stats, rageAvailable)
-		-- TurtleWoW: 600 + (excessRage * 15)
+		-- TurtleWoW: base + (excessRage * coeff)
+		-- Values depend on spell rank
 		local cost = ATW.Talents.ExecCost or 15
 		local excess = (rageAvailable or 30) - cost
 		if excess < 0 then excess = 0 end
-		return 600 + (excess * 15)
+		local base = ATW.GetExecuteBase and ATW.GetExecuteBase() or 600
+		local coeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or 15
+		return base + (excess * coeff)
 	end,
 	condition = function(state)
 		-- Only in execute phase (<20% HP)
@@ -97,9 +103,10 @@ Abilities.MortalStrike = {
 	gcd = true,
 	isCooldown = false,
 	damage = function(stats)
-		-- Weapon damage + 160 (rank 4)
+		-- Weapon damage + bonus (dynamic by rank)
 		local weaponDmg = stats.MHDmg or 100
-		return weaponDmg + 160
+		local bonus = ATW.GetMortalStrikeBonus and ATW.GetMortalStrikeBonus() or 120
+		return weaponDmg + bonus
 	end,
 	condition = function(state)
 		return ATW.Talents.HasMS and ATW.HasWeapon and ATW.HasWeapon()
@@ -114,11 +121,14 @@ Abilities.Overpower = {
 	gcd = true,
 	isCooldown = false,
 	damage = function(stats)
-		-- Weapon damage + 35, cannot be blocked/dodged/parried, +50% crit from talents
+		-- Weapon damage + bonus (dynamic by rank)
+		-- Cannot be blocked/dodged/parried, +50% crit from Improved Overpower
 		local weaponDmg = stats.MHDmg or 100
+		local bonus = ATW.GetOverpowerBonus and ATW.GetOverpowerBonus() or 35
 		-- Higher effective damage due to guaranteed hit and crit bonus
-		local critBonus = 1 + ((stats.Crit + 50) / 100)
-		return (weaponDmg + 35) * critBonus * 0.6  -- Weighted for expected value
+		local impOP = ATW.Talents and ATW.Talents.ImpOP or 0  -- 0/25/50%
+		local critBonus = 1 + ((stats.Crit + impOP) / 100)
+		return (weaponDmg + bonus) * critBonus * 0.6  -- Weighted for expected value
 	end,
 	condition = function(state)
 		return ATW.State.Overpower and ATW.HasWeapon and ATW.HasWeapon()
@@ -133,11 +143,12 @@ Abilities.Slam = {
 	gcd = true,  -- Has cast time, not instant
 	isCooldown = false,
 	damage = function(stats)
-		-- TurtleWoW: Weapon + normalized AP + 87, pauses swing timer
+		-- TurtleWoW: Weapon + AP scaling + bonus (dynamic by rank)
 		local weaponDmg = stats.MHDmg or 100
 		local weaponSpeed = stats.MainHandSpeed or 2.6
 		local apBonus = stats.AP * (weaponSpeed / 14)
-		return weaponDmg + apBonus + 87
+		local bonus = ATW.GetSlamBonus and ATW.GetSlamBonus() or 87
+		return weaponDmg + apBonus + bonus
 	end,
 	condition = function(state)
 		-- Only worth using with 2H (check for no offhand)
@@ -157,12 +168,13 @@ Abilities.HeroicStrike = {
 	gcd = false,  -- On next swing, not instant
 	isCooldown = false,
 	damage = function(stats)
-		-- Weapon damage + 157 (rank 9), replaces white hit
+		-- Weapon damage + bonus (dynamic by rank), replaces white hit
 		-- NOT normalized, uses actual weapon speed
 		local weaponDmg = stats.MHDmg or 100
 		local weaponSpeed = stats.MainHandSpeed or 2.6
 		local apBonus = stats.AP * (weaponSpeed / 14)
-		return weaponDmg + apBonus + 157
+		local bonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or 157
+		return weaponDmg + apBonus + bonus
 	end,
 	condition = function(state)
 		return ATW.HasWeapon and ATW.HasWeapon()
@@ -190,7 +202,8 @@ Abilities.Cleave = {
 		local weaponDmg = stats.MHDmg or 100
 		local weaponSpeed = stats.MainHandSpeed or 2.6
 		local apBonus = stats.AP * (weaponSpeed / 14)
-		local singleDmg = weaponDmg + apBonus + 50
+		local bonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or 50
+		local singleDmg = weaponDmg + apBonus + bonus
 
 		-- Actual targets hit (max 2 for Cleave) at 8yd range
 		local targets = 1

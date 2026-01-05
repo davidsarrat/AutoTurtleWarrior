@@ -227,3 +227,129 @@ function ATW.InExecutePhase(unit)
 	if not UnitExists(unit) then return false end
 	return ATW.GetHealthPercent(unit) < 20
 end
+
+---------------------------------------
+-- Overpower Proc Tracking
+-- Tracks which mob dodged to enable smarter target selection
+-- In vanilla, Overpower can be used on ANY target after a dodge,
+-- but it's optimal to use it on the mob that dodged (or switch to it)
+---------------------------------------
+function ATW.SetOverpowerProc(mobName)
+	local state = ATW.State
+	local now = GetTime()
+
+	state.Overpower = now
+	state.OverpowerTarget = mobName
+	state.OverpowerGUID = nil
+
+	-- Try to find GUID for the mob that dodged
+	if mobName and ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		-- Priority 1: Check if current target matches
+		if UnitExists("target") and UnitName("target") == mobName then
+			local _, guid = UnitExists("target")
+			if guid then
+				state.OverpowerGUID = guid
+			end
+		else
+			-- Priority 2: Scan nameplates for this mob name
+			local children = { WorldFrame:GetChildren() }
+			for i, frame in ipairs(children) do
+				if frame:IsVisible() and not frame:GetName() then
+					-- Try to get GUID from nameplate
+					local ok, guid = pcall(function()
+						return frame:GetName(1)  -- SuperWoW nameplate GUID
+					end)
+					if ok and guid and guid ~= "" then
+						-- Check if this GUID matches our mob name
+						local unitName = UnitName(guid)
+						if unitName == mobName then
+							state.OverpowerGUID = guid
+							break
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+		local guidInfo = state.OverpowerGUID and (" GUID:" .. string.sub(state.OverpowerGUID, 1, 12)) or ""
+		ATW.Debug("Overpower proc: " .. (mobName or "unknown") .. guidInfo)
+	end
+end
+
+---------------------------------------
+-- Get Overpower target info
+-- Returns: isAvailable, mobName, guid, isCurrentTarget, windowRemaining
+---------------------------------------
+function ATW.GetOverpowerInfo()
+	local state = ATW.State
+
+	if not state.Overpower then
+		return false, nil, nil, false, 0
+	end
+
+	local windowRemaining = 4 - (GetTime() - state.Overpower)
+	if windowRemaining <= 0 then
+		-- Window expired, clear state
+		state.Overpower = nil
+		state.OverpowerTarget = nil
+		state.OverpowerGUID = nil
+		return false, nil, nil, false, 0
+	end
+
+	-- Check if the mob that dodged is our current target
+	local isCurrentTarget = false
+	if state.OverpowerGUID and ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		local _, targetGUID = UnitExists("target")
+		isCurrentTarget = (targetGUID and targetGUID == state.OverpowerGUID)
+	elseif state.OverpowerTarget then
+		isCurrentTarget = (UnitName("target") == state.OverpowerTarget)
+	end
+
+	return true, state.OverpowerTarget, state.OverpowerGUID, isCurrentTarget, windowRemaining
+end
+
+---------------------------------------
+-- Should switch target for Overpower?
+-- Returns: shouldSwitch, guid, reason
+---------------------------------------
+function ATW.ShouldSwitchForOverpower()
+	local isAvailable, mobName, guid, isCurrentTarget, windowRemaining = ATW.GetOverpowerInfo()
+
+	if not isAvailable then
+		return false, nil, "no proc"
+	end
+
+	-- Already targeting the mob that dodged
+	if isCurrentTarget then
+		return false, nil, "already targeting"
+	end
+
+	-- Don't switch if we don't have GUID (could hit wrong mob with same name)
+	if not guid then
+		return false, nil, "no GUID (name: " .. (mobName or "?") .. ")"
+	end
+
+	-- Check if the mob is still alive
+	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		local hp = UnitHealth(guid)
+		if not hp or hp <= 0 then
+			return false, nil, "target dead"
+		end
+
+		-- Check if mob is in range (5yd for Overpower)
+		local dist = ATW.GetDistance and ATW.GetDistance(guid)
+		if dist and dist > 5 then
+			return false, nil, "out of range (" .. string.format("%.1f", dist) .. "yd)"
+		end
+	end
+
+	-- Window urgent - should switch
+	if windowRemaining <= 2 then
+		return true, guid, "window expiring (" .. string.format("%.1f", windowRemaining) .. "s)"
+	end
+
+	-- Window has time - switching is optional
+	return true, guid, "different target (" .. string.format("%.1f", windowRemaining) .. "s left)"
+end

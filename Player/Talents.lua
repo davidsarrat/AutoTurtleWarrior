@@ -2,21 +2,122 @@
 	Auto Turtle Warrior - Player/Talents
 	Talent detection, spell rank detection, and loading
 	All talents and spells used by Engine.lua simulation
+
+	Spell data source: Zebouski/WarriorSim-TurtleWoW
+	https://github.com/Zebouski/WarriorSim-TurtleWoW
 ]]--
 
 ---------------------------------------
--- Rend Spell Data (by rank)
--- Source: https://www.wowhead.com/classic/spell=772/rend
+-- Spell Data Tables (by rank)
+-- All values from Zebouski/WarriorSim-TurtleWoW
 ---------------------------------------
+
+-- Rend: base total damage, duration in seconds
+-- TurtleWoW has 22s duration for rank 5-7 (not 21s like retail)
 ATW.RendData = {
 	-- [rank] = { damage, duration, level }
-	[1] = { damage = 15,  duration = 9,  level = 4 },
-	[2] = { damage = 28,  duration = 12, level = 10 },
-	[3] = { damage = 45,  duration = 15, level = 20 },
-	[4] = { damage = 66,  duration = 18, level = 30 },
-	[5] = { damage = 98,  duration = 21, level = 40 },
-	[6] = { damage = 126, duration = 21, level = 50 },
-	[7] = { damage = 147, duration = 21, level = 60 },
+	[1] = { damage = 15,  duration = 10, level = 4 },
+	[2] = { damage = 28,  duration = 13, level = 10 },
+	[3] = { damage = 45,  duration = 16, level = 20 },
+	[4] = { damage = 66,  duration = 19, level = 30 },
+	[5] = { damage = 98,  duration = 22, level = 40 },
+	[6] = { damage = 126, duration = 22, level = 50 },
+	[7] = { damage = 147, duration = 22, level = 60 },
+}
+
+-- Execute: base damage + (rage * coefficient)
+-- Formula: baseDmg + (usedRage * coeff)
+ATW.ExecuteData = {
+	-- [rank] = { base, coeff, level }
+	[1] = { base = 75,  coeff = 4,  level = 24 },
+	[2] = { base = 150, coeff = 8,  level = 32 },
+	[3] = { base = 225, coeff = 12, level = 40 },
+	[4] = { base = 300, coeff = 16, level = 48 },
+	[5] = { base = 600, coeff = 15, level = 56 },
+}
+
+-- Heroic Strike: bonus damage added to weapon damage
+ATW.HeroicStrikeData = {
+	-- [rank] = { bonus, level }
+	[1] = { bonus = 11,  level = 1 },
+	[2] = { bonus = 21,  level = 8 },
+	[3] = { bonus = 32,  level = 16 },
+	[4] = { bonus = 44,  level = 24 },
+	[5] = { bonus = 58,  level = 32 },
+	[6] = { bonus = 80,  level = 40 },
+	[7] = { bonus = 111, level = 48 },
+	[8] = { bonus = 138, level = 56 },
+	[9] = { bonus = 157, level = 60 },
+}
+
+-- Mortal Strike: bonus damage (uses normalized weapon damage)
+ATW.MortalStrikeData = {
+	-- [rank] = { bonus, level }
+	[1] = { bonus = 105, level = 40 },
+	[2] = { bonus = 110, level = 48 },
+	[3] = { bonus = 115, level = 54 },
+	[4] = { bonus = 120, level = 60 },
+}
+
+-- Cleave: bonus damage per target (hits 2 targets)
+ATW.CleaveData = {
+	-- [rank] = { bonus, level }
+	[1] = { bonus = 5,  level = 20 },
+	[2] = { bonus = 10, level = 30 },
+	[3] = { bonus = 18, level = 40 },
+	[4] = { bonus = 32, level = 50 },
+	[5] = { bonus = 50, level = 60 },
+}
+
+-- Overpower: bonus damage (uses normalized weapon damage)
+ATW.OverpowerData = {
+	-- [rank] = { bonus, level }
+	[1] = { bonus = 5,  level = 12 },
+	[2] = { bonus = 15, level = 28 },
+	[3] = { bonus = 25, level = 44 },
+	[4] = { bonus = 35, level = 60 },
+}
+
+-- Hamstring: flat damage
+ATW.HamstringData = {
+	-- [rank] = { damage, level }
+	[1] = { damage = 5,  level = 8 },
+	[2] = { damage = 18, level = 32 },
+	[3] = { damage = 45, level = 54 },
+}
+
+-- Slam: bonus damage (uses weapon damage + bonus)
+ATW.SlamData = {
+	-- [rank] = { bonus, level }
+	[1] = { bonus = 32, level = 30 },
+	[2] = { bonus = 43, level = 38 },
+	[3] = { bonus = 68, level = 46 },
+	[4] = { bonus = 87, level = 54 },
+}
+
+-- Battle Shout: AP bonus
+ATW.BattleShoutData = {
+	-- [rank] = { ap, level }
+	[1] = { ap = 15,  level = 1 },
+	[2] = { ap = 35,  level = 12 },
+	[3] = { ap = 55,  level = 22 },
+	[4] = { ap = 85,  level = 32 },
+	[5] = { ap = 130, level = 42 },
+	[6] = { ap = 185, level = 52 },
+	[7] = { ap = 232, level = 60 },
+}
+
+-- Bloodthirst: TurtleWoW formula is 200 + AP * 0.35
+-- Only 1 rank (talent ability)
+ATW.BloodthirstData = {
+	base = 200,
+	apCoeff = 0.35,
+}
+
+-- Whirlwind: uses normalized weapon damage, no bonus
+-- Only 1 rank
+ATW.WhirlwindData = {
+	normSpeed = 2.4,  -- Normalized speed for 1H
 }
 
 ---------------------------------------
@@ -114,36 +215,147 @@ function ATW.GetRendTickDamage()
 end
 
 ---------------------------------------
+-- Execute: Get base damage and rage coefficient
+---------------------------------------
+function ATW.GetExecuteBase()
+	local rank = ATW.Spells and ATW.Spells.ExecuteRank or 0
+	if rank <= 0 then return 600 end  -- Default to max
+	local data = ATW.ExecuteData[rank]
+	return data and data.base or 600
+end
+
+function ATW.GetExecuteCoeff()
+	local rank = ATW.Spells and ATW.Spells.ExecuteRank or 0
+	if rank <= 0 then return 15 end  -- Default to max
+	local data = ATW.ExecuteData[rank]
+	return data and data.coeff or 15
+end
+
+---------------------------------------
+-- Heroic Strike: Get bonus damage
+---------------------------------------
+function ATW.GetHeroicStrikeBonus()
+	local rank = ATW.Spells and ATW.Spells.HeroicStrikeRank or 0
+	if rank <= 0 then return 157 end  -- Default to max
+	local data = ATW.HeroicStrikeData[rank]
+	return data and data.bonus or 157
+end
+
+---------------------------------------
+-- Mortal Strike: Get bonus damage
+---------------------------------------
+function ATW.GetMortalStrikeBonus()
+	local rank = ATW.Spells and ATW.Spells.MortalStrikeRank or 0
+	if rank <= 0 then return 120 end  -- Default to max
+	local data = ATW.MortalStrikeData[rank]
+	return data and data.bonus or 120
+end
+
+---------------------------------------
+-- Cleave: Get bonus damage
+---------------------------------------
+function ATW.GetCleaveBonus()
+	local rank = ATW.Spells and ATW.Spells.CleaveRank or 0
+	if rank <= 0 then return 50 end  -- Default to max
+	local data = ATW.CleaveData[rank]
+	return data and data.bonus or 50
+end
+
+---------------------------------------
+-- Overpower: Get bonus damage
+---------------------------------------
+function ATW.GetOverpowerBonus()
+	local rank = ATW.Spells and ATW.Spells.OverpowerRank or 0
+	if rank <= 0 then return 35 end  -- Default to max
+	local data = ATW.OverpowerData[rank]
+	return data and data.bonus or 35
+end
+
+---------------------------------------
+-- Hamstring: Get damage
+---------------------------------------
+function ATW.GetHamstringDamage()
+	local rank = ATW.Spells and ATW.Spells.HamstringRank or 0
+	if rank <= 0 then return 45 end  -- Default to max
+	local data = ATW.HamstringData[rank]
+	return data and data.damage or 45
+end
+
+---------------------------------------
+-- Slam: Get bonus damage
+---------------------------------------
+function ATW.GetSlamBonus()
+	local rank = ATW.Spells and ATW.Spells.SlamRank or 0
+	if rank <= 0 then return 87 end  -- Default to max
+	local data = ATW.SlamData[rank]
+	return data and data.bonus or 87
+end
+
+---------------------------------------
+-- Battle Shout: Get AP bonus
+---------------------------------------
+function ATW.GetBattleShoutAP()
+	local rank = ATW.Spells and ATW.Spells.BattleShoutRank or 0
+	if rank <= 0 then return 232 end  -- Default to max
+	local data = ATW.BattleShoutData[rank]
+	return data and data.ap or 232
+end
+
+---------------------------------------
+-- Bloodthirst: Get damage (200 + AP * 0.35)
+---------------------------------------
+function ATW.GetBloodthirstDamage(ap)
+	ap = ap or (ATW.Stats and ATW.Stats.AP) or 1000
+	return ATW.BloodthirstData.base + (ap * ATW.BloodthirstData.apCoeff)
+end
+
+---------------------------------------
 -- Load known spells and their max ranks
 ---------------------------------------
 function ATW.LoadSpells()
 	ATW.Spells = ATW.Spells or {}
 
-	-- Rend (key spell for tracking)
+	-- Core combat spells (ranked)
 	ATW.Spells.RendRank = ATW.GetMaxSpellRank("Rend")
 	ATW.Spells.HasRend = ATW.Spells.RendRank > 0
+	ATW.Spells.ExecuteRank = ATW.GetMaxSpellRank("Execute")
+	ATW.Spells.HeroicStrikeRank = ATW.GetMaxSpellRank("Heroic Strike")
+	ATW.Spells.CleaveRank = ATW.GetMaxSpellRank("Cleave")
+	ATW.Spells.OverpowerRank = ATW.GetMaxSpellRank("Overpower")
+	ATW.Spells.HamstringRank = ATW.GetMaxSpellRank("Hamstring")
+	ATW.Spells.SlamRank = ATW.GetMaxSpellRank("Slam")
+	ATW.Spells.WhirlwindRank = ATW.GetMaxSpellRank("Whirlwind")
+	ATW.Spells.BattleShoutRank = ATW.GetMaxSpellRank("Battle Shout")
+
+	-- Talent abilities (only 1 rank)
+	ATW.Spells.BloodthirstRank = ATW.GetMaxSpellRank("Bloodthirst")
+	ATW.Spells.MortalStrikeRank = ATW.GetMaxSpellRank("Mortal Strike")
+
+	-- Utility spells (needed for simulator to know if learned)
+	ATW.Spells.ChargeRank = ATW.GetMaxSpellRank("Charge")
+	ATW.Spells.BloodrageRank = ATW.GetMaxSpellRank("Bloodrage")
+	ATW.Spells.BerserkerRageRank = ATW.GetMaxSpellRank("Berserker Rage")
+	ATW.Spells.PummelRank = ATW.GetMaxSpellRank("Pummel")
+
+	-- Cooldown abilities (talent-based, only 1 rank)
+	ATW.Spells.DeathWishRank = ATW.GetMaxSpellRank("Death Wish")
+	ATW.Spells.RecklessnessRank = ATW.GetMaxSpellRank("Recklessness")
+	ATW.Spells.SweepingStrikesRank = ATW.GetMaxSpellRank("Sweeping Strikes")
 
 	-- Update RendTracker duration with actual spell rank
 	if ATW.RendTracker and ATW.Spells.RendRank > 0 then
 		ATW.RendTracker.REND_DURATION = ATW.GetRendDuration()
 	end
 
-	-- Other combat spells (for reference)
-	ATW.Spells.ExecuteRank = ATW.GetMaxSpellRank("Execute")
-	ATW.Spells.WhirlwindRank = ATW.GetMaxSpellRank("Whirlwind")
-	ATW.Spells.BloodthirstRank = ATW.GetMaxSpellRank("Bloodthirst")
-	ATW.Spells.MortalStrikeRank = ATW.GetMaxSpellRank("Mortal Strike")
-	ATW.Spells.HeroicStrikeRank = ATW.GetMaxSpellRank("Heroic Strike")
-	ATW.Spells.BattleShoutRank = ATW.GetMaxSpellRank("Battle Shout")
-
 	-- Debug output
 	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
 		ATW.Print("Spells loaded:")
-		ATW.Print("  Rend: Rank " .. ATW.Spells.RendRank ..
-			" (" .. ATW.GetRendDamage() .. " dmg / " .. ATW.GetRendDuration() .. "s)")
-		ATW.Print("  Execute: Rank " .. ATW.Spells.ExecuteRank)
-		ATW.Print("  BT: Rank " .. ATW.Spells.BloodthirstRank ..
-			" | MS: Rank " .. ATW.Spells.MortalStrikeRank)
+		ATW.Print("  Rend R" .. ATW.Spells.RendRank .. " | Exec R" .. ATW.Spells.ExecuteRank ..
+			" | HS R" .. ATW.Spells.HeroicStrikeRank)
+		ATW.Print("  BT: " .. (ATW.Spells.BloodthirstRank > 0 and "Yes" or "No") ..
+			" | MS R" .. ATW.Spells.MortalStrikeRank)
+		ATW.Print("  WW R" .. ATW.Spells.WhirlwindRank .. " | Slam R" .. ATW.Spells.SlamRank ..
+			" | Charge R" .. ATW.Spells.ChargeRank)
 	end
 end
 

@@ -20,6 +20,9 @@ ATW.Swing = {
 	-- Combat state
 	inCombat = false,
 	lastCombatAction = 0,
+
+	-- Detection method
+	usingCastEvent = false,  -- true if using SuperWoW UNIT_CASTEVENT (more reliable)
 }
 
 ---------------------------------------
@@ -182,36 +185,40 @@ function ATW.ShouldQueueSwingAbility()
 end
 
 ---------------------------------------
--- Parse combat log for swing detection
+-- Parse combat log for swing detection (legacy fallback)
+-- Kept for compatibility but UNIT_CASTEVENT is preferred
 ---------------------------------------
 function ATW.ParseCombatLogForSwing(msg, event)
 	if not msg then return end
 
-	-- Main hand white hits
-	-- "You hit X for Y."
-	-- "You crit X for Y."
-	-- "You miss X."
-	-- "Your attack was parried."
-	-- "Your attack was dodged."
-	-- "Your attack was blocked."
+	-- Only use combat log if UNIT_CASTEVENT is not available
+	-- UNIT_CASTEVENT is much more reliable (SuperWoW feature)
+	if ATW.Swing.usingCastEvent then
+		-- Only parse for HS/Cleave hit confirmation
+		if event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
+			if strfind(msg, "Your Heroic Strike") or strfind(msg, "Your Cleave") then
+				ATW.Swing.queued = nil
+				ATW.Swing.queuedTime = 0
+			end
+		end
+		return
+	end
 
+	-- Fallback: Main hand white hits via combat log (less reliable)
 	local isHit = false
 	local isSpecial = false
 	local isMainHand = true
 
 	if event == "CHAT_MSG_COMBAT_SELF_HITS" then
-		-- "You hit X for Y." or "You crit X for Y."
 		if strfind(msg, "^You hit") or strfind(msg, "^You crit") then
 			isHit = true
 		end
 	elseif event == "CHAT_MSG_COMBAT_SELF_MISSES" then
-		-- "You miss X." or parry/dodge/block
 		if strfind(msg, "^You miss") or
 		   strfind(msg, "^Your attack was") then
 			isHit = true
 		end
 	elseif event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
-		-- Heroic Strike or Cleave hit
 		if strfind(msg, "Your Heroic Strike") then
 			isHit = true
 			isSpecial = true
@@ -225,6 +232,68 @@ function ATW.ParseCombatLogForSwing(msg, event)
 
 	if isHit then
 		ATW.OnMeleeSwing(isMainHand, isSpecial)
+	end
+end
+
+---------------------------------------
+-- SuperWoW UNIT_CASTEVENT handler
+-- This is the reliable method for swing detection
+-- arg1: casterGUID, arg2: targetGUID, arg3: event type, arg4: spellID, arg5: duration
+-- Event types: "MAINHAND", "OFFHAND", "START", "CAST", "FAIL", "CHANNEL"
+---------------------------------------
+function ATW.OnUnitCastEvent(casterGUID, targetGUID, eventType, spellID, duration)
+	-- Only process player events
+	if not casterGUID then return end
+
+	-- Get player GUID
+	local playerGUID = nil
+	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		local ok, guid = pcall(function()
+			local _, g = UnitExists("player")
+			return g
+		end)
+		if ok then playerGUID = guid end
+	end
+
+	-- Not player's event
+	if not playerGUID or casterGUID ~= playerGUID then return end
+
+	local swing = ATW.Swing
+	local now = GetTime()
+
+	if eventType == "MAINHAND" then
+		-- Main hand swing landed
+		swing.lastMH = now
+		swing.usingCastEvent = true  -- Mark that we're using this method
+
+		-- Check if HS/Cleave was queued (it replaces the swing)
+		local wasSpecial = (swing.queued ~= nil)
+		if wasSpecial then
+			swing.queued = nil
+			swing.queuedTime = 0
+		end
+
+		-- Update weapon speeds from stats
+		swing.MHSpeed = ATW.Stats.MainHandSpeed or 2.6
+		swing.OHSpeed = ATW.Stats.OffHandSpeed or 2.6
+		swing.lastCombatAction = now
+
+		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+			ATW.Debug("MH swing" .. (wasSpecial and " (HS/Cleave)" or ""))
+		end
+
+	elseif eventType == "OFFHAND" then
+		-- Off-hand swing landed
+		swing.lastOH = now
+		swing.usingCastEvent = true
+
+		-- Update weapon speeds from stats
+		swing.OHSpeed = ATW.Stats.OffHandSpeed or 2.6
+		swing.lastCombatAction = now
+
+		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+			ATW.Debug("OH swing")
+		end
 	end
 end
 
@@ -384,12 +453,29 @@ function ATW.PrintSwingTimer()
 	local priority = ATW.GetSwingQueuePriority()
 
 	ATW.Print("--- Swing Timer ---")
-	ATW.Print("MH: " .. string.format("%.2f", mhRemaining) .. "s / " ..
-		string.format("%.2f", swing.MHSpeed) .. "s")
 
+	-- Show detection method
+	local method = swing.usingCastEvent and "|cff00ff00UNIT_CASTEVENT|r" or "|cffff9900Combat Log|r"
+	ATW.Print("Method: " .. method)
+
+	-- Main hand
+	local mhStatus = ""
+	if swing.lastMH > 0 then
+		mhStatus = string.format("%.2f", mhRemaining) .. "s / " .. string.format("%.2f", swing.MHSpeed) .. "s"
+	else
+		mhStatus = "|cffff9900No data|r"
+	end
+	ATW.Print("MH: " .. mhStatus)
+
+	-- Off hand
 	if ATW.Stats.HasOffHand then
-		ATW.Print("OH: " .. string.format("%.2f", ohRemaining) .. "s / " ..
-			string.format("%.2f", swing.OHSpeed) .. "s")
+		local ohStatus = ""
+		if swing.lastOH > 0 then
+			ohStatus = string.format("%.2f", ohRemaining) .. "s / " .. string.format("%.2f", swing.OHSpeed) .. "s"
+		else
+			ohStatus = "|cffff9900No data|r"
+		end
+		ATW.Print("OH: " .. ohStatus)
 	end
 
 	local queueStatus = swing.queued or "none"

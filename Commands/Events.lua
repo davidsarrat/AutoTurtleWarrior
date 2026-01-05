@@ -30,6 +30,8 @@ EventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 EventFrame:RegisterEvent("UNIT_ATTACK_POWER")
 -- TTD updates
 EventFrame:RegisterEvent("UNIT_HEALTH")
+-- SuperWoW swing timer (more reliable than combat log)
+EventFrame:RegisterEvent("UNIT_CASTEVENT")
 
 ---------------------------------------
 -- Event Handler
@@ -106,8 +108,14 @@ EventFrame:SetScript("OnEvent", function()
 
 	elseif event == "CHAT_MSG_COMBAT_SELF_MISSES" then
 		-- Detect dodge for Overpower
+		-- In vanilla, ANY dodge enables Overpower on ANY target (global proc)
 		if arg1 and strfind(arg1, "dodges") then
 			state.Overpower = GetTime()
+			-- Optional: track mob name for debug/advanced use
+			if ATW.SetOverpowerProc then
+				local _, _, name = strfind(arg1, "^(.+) dodges")
+				ATW.SetOverpowerProc(name)
+			end
 		end
 		-- Track swing timer
 		ATW.ParseCombatLogForSwing(arg1, event)
@@ -115,8 +123,15 @@ EventFrame:SetScript("OnEvent", function()
 	elseif event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
 		if arg1 then
 			if strfind(arg1, "was dodged") then
+				-- Ability was dodged - enables Overpower
 				state.Overpower = GetTime()
+				-- Optional: track mob name
+				if ATW.SetOverpowerProc then
+					local _, _, name = strfind(arg1, "was dodged by (.+)%.$")
+					ATW.SetOverpowerProc(name)
+				end
 			elseif strfind(arg1, "Your Overpower") then
+				-- Overpower was used - clear the proc
 				state.Overpower = nil
 			end
 		end
@@ -154,6 +169,14 @@ EventFrame:SetScript("OnEvent", function()
 	elseif event == "UNIT_HEALTH" then
 		if arg1 == "target" then
 			ATW.UpdateTargetTTD()
+		end
+
+	-- SuperWoW swing timer event (more reliable than combat log)
+	-- arg1: casterGUID, arg2: targetGUID, arg3: eventType, arg4: spellID, arg5: duration
+	-- eventType: "MAINHAND", "OFFHAND", "START", "CAST", "FAIL", "CHANNEL"
+	elseif event == "UNIT_CASTEVENT" then
+		if ATW.OnUnitCastEvent then
+			ATW.OnUnitCastEvent(arg1, arg2, arg3, arg4, arg5)
 		end
 	end
 end)
