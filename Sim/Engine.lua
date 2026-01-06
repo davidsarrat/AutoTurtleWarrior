@@ -1774,6 +1774,33 @@ function Engine.CaptureCurrentState()
 	state.hasPerception = ATW.Buff and ATW.Buff("player", "Spell_Nature_Sleep")
 
 	---------------------------------------
+	-- COOLDOWN CAPTURE FROM GAME API
+	-- Read actual cooldowns so simulation knows what's available
+	---------------------------------------
+	if ATW.GetCooldownRemaining then
+		-- Main abilities
+		state.cooldowns.Bloodthirst = ATW.GetCooldownRemaining("Bloodthirst")
+		state.cooldowns.MortalStrike = ATW.GetCooldownRemaining("Mortal Strike")
+		state.cooldowns.Whirlwind = ATW.GetCooldownRemaining("Whirlwind")
+		state.cooldowns.Overpower = ATW.GetCooldownRemaining("Overpower")
+		state.cooldowns.Pummel = ATW.GetCooldownRemaining("Pummel")
+		state.cooldowns.Slam = ATW.GetCooldownRemaining("Slam")
+		state.cooldowns.Charge = ATW.GetCooldownRemaining("Charge")
+
+		-- Cooldown abilities
+		state.cooldowns.Bloodrage = ATW.GetCooldownRemaining("Bloodrage")
+		state.cooldowns.BerserkerRage = ATW.GetCooldownRemaining("Berserker Rage")
+		state.cooldowns.DeathWish = ATW.GetCooldownRemaining("Death Wish")
+		state.cooldowns.Recklessness = ATW.GetCooldownRemaining("Recklessness")
+		state.cooldowns.SweepingStrikes = ATW.GetCooldownRemaining("Sweeping Strikes")
+
+		-- Racial cooldowns
+		state.cooldowns.BloodFury = ATW.GetCooldownRemaining("Blood Fury")
+		state.cooldowns.Berserking = ATW.GetCooldownRemaining("Berserking")
+		state.cooldowns.Perception = ATW.GetCooldownRemaining("Perception")
+	end
+
+	---------------------------------------
 	-- INTERRUPT STATE (for Pummel)
 	---------------------------------------
 	state.shouldInterrupt = ATW.State and ATW.State.Interrupt or false

@@ -497,6 +497,61 @@ Abilities.Charge = {
 }
 
 ---------------------------------------
+-- Racial Abilities (TurtleWoW)
+---------------------------------------
+
+Abilities.BloodFury = {
+	name = "Blood Fury",  -- Actual spell name with space
+	rage = 0,
+	cd = 120,  -- 2 minutes
+	stance = {0},  -- Any stance
+	gcd = false,  -- Off-GCD in TurtleWoW
+	isCooldown = true,
+	duration = 15,
+	effect = "+AP = level*2 (120 at 60)",
+	damage = function(stats)
+		return 0  -- Buff, not direct damage
+	end,
+	condition = function(state)
+		return ATW.Racials and ATW.Racials.HasBloodFury
+	end,
+}
+
+Abilities.Berserking = {
+	name = "Berserking",
+	rage = 5,  -- Costs 5 rage in TurtleWoW
+	cd = 180,  -- 3 minutes
+	stance = {0},  -- Any stance
+	gcd = true,  -- On GCD
+	isCooldown = true,
+	duration = 10,
+	effect = "10-15% haste based on HP",
+	damage = function(stats)
+		return 0  -- Buff, not direct damage
+	end,
+	condition = function(state)
+		return ATW.Racials and ATW.Racials.HasBerserking
+	end,
+}
+
+Abilities.Perception = {
+	name = "Perception",
+	rage = 0,
+	cd = 180,  -- 3 minutes
+	stance = {0},  -- Any stance
+	gcd = false,  -- Off-GCD in TurtleWoW
+	isCooldown = true,
+	duration = 20,
+	effect = "+2% crit (TurtleWoW DPS version)",
+	damage = function(stats)
+		return 0  -- Buff, not direct damage
+	end,
+	condition = function(state)
+		return ATW.Racials and ATW.Racials.HasPerception
+	end,
+}
+
+---------------------------------------
 -- Helper to get ability by name
 ---------------------------------------
 function ATW.GetAbility(name)

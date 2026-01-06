@@ -41,6 +41,24 @@ function ATW.Ready(spell)
 end
 
 ---------------------------------------
+-- Get remaining cooldown in milliseconds
+-- Returns 0 if ready, or remaining time in ms
+---------------------------------------
+function ATW.GetCooldownRemaining(spell)
+	local id = ATW.SpellID(spell)
+	if not id then return 0 end
+	local start, dur = GetSpellCooldown(id, 0)
+	if not start or start == 0 or not dur or dur == 0 then
+		return 0  -- Ready
+	end
+	local remaining = (start + dur) - GetTime()
+	if remaining <= 0 then
+		return 0
+	end
+	return remaining * 1000  -- Convert to ms
+end
+
+---------------------------------------
 -- Buff / Debuff Detection
 ---------------------------------------
 function ATW.Buff(unit, texture)

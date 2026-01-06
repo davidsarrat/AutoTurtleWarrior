@@ -147,9 +147,14 @@ function ATW.Rotation()
 	                    abilityName == "BattleShout" or
 	                    abilityName == "DeathWish" or
 	                    abilityName == "BerserkerRage" or
-	                    abilityName == "Recklessness")
+	                    abilityName == "Recklessness" or
+	                    -- Racial abilities (self-buffs)
+	                    abilityName == "BloodFury" or
+	                    abilityName == "Berserking" or
+	                    abilityName == "Perception")
 
 	if isSelfBuff then
+		-- ability.name contains the actual spell name (from Abilities.lua)
 		ATW.CastSelf(ability.name)
 
 	-- GUID-based Execute (targets any mob in execute range)
