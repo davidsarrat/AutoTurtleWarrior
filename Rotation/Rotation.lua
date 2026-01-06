@@ -170,7 +170,8 @@ function ATW.Rotation()
 			return
 		end
 	elseif abilityName == "SweepingStrikes" then
-		ATW.Cast(ability.name)
+		-- Self-buff: use CastSelf to avoid inheriting spell target from nameplate
+		ATW.CastSelf(ability.name)
 		state.Dancing = true
 	elseif abilityName == "Whirlwind" then
 		ATW.Cast(ability.name, true)
@@ -190,9 +191,15 @@ function ATW.Rotation()
 			state.Dancing = true
 		end
 	elseif abilityName == "HeroicStrike" or abilityName == "Cleave" then
-		-- Swing queue ability - NO GUID targeting needed!
-		-- These modify your next auto-attack, not a targeted cast
-		CastSpellByName(ability.name)
+		-- Swing queue ability - but MUST specify target GUID to reset spell target!
+		-- After casting Rend/OP on nameplate, SuperWoW keeps that as "spell target"
+		-- We need to explicitly set target GUID to ensure HS/Cleave go to current target
+		local _, targetGUID = UnitExists("target")
+		if targetGUID and targetGUID ~= "" then
+			CastSpellByName(ability.name, targetGUID)
+		else
+			CastSpellByName(ability.name)
+		end
 		ATW.OnSwingAbilityQueued(ability.name)
 	elseif abilityName == "Slam" then
 		-- Slam has cast time, use standard cast
@@ -304,7 +311,7 @@ function ATW.LegacyRotation()
 	-- Sweeping Strikes
 	if aoe and not ATW.Buff("player", "Ability_Rogue_SliceDice") and rage >= 30 and ATW.Ready("Sweeping Strikes") then
 		if st == 1 then
-			ATW.Cast("Sweeping Strikes")
+			ATW.CastSelf("Sweeping Strikes")
 			state.Dancing = true
 			return
 		elseif ATW.CanDance(rage) then

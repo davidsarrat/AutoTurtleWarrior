@@ -1544,7 +1544,13 @@ Engine.CastExecuteOnGUID = function(guid)
 	if ATW.GUIDTargeting then
 		return ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 	end
-	CastSpellByName("Execute")
+	-- Fallback: use explicit target GUID to reset spell target
+	local _, targetGuid = UnitExists("target")
+	if targetGuid and targetGuid ~= "" then
+		CastSpellByName("Execute", targetGuid)
+	else
+		CastSpellByName("Execute")
+	end
 	return true
 end
 

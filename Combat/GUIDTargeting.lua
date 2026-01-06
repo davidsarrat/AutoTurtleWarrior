@@ -73,15 +73,26 @@ end
 -- Targets any mob in execute range
 ---------------------------------------
 function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
+	-- Always get current target GUID for explicit targeting
+	local _, targetGuid = UnitExists("target")
+
 	if not guid then
-		-- No GUID specified, try current target
-		CastSpellByName("Execute")
+		-- No GUID specified, use current target with explicit GUID
+		if targetGuid and targetGuid ~= "" then
+			CastSpellByName("Execute", targetGuid)
+		else
+			CastSpellByName("Execute")
+		end
 		return true
 	end
 
 	if not ATW.HasSuperWoW or not ATW.HasSuperWoW() then
-		-- No SuperWoW, just cast on current target
-		CastSpellByName("Execute")
+		-- No SuperWoW, cast on current target with explicit GUID
+		if targetGuid and targetGuid ~= "" then
+			CastSpellByName("Execute", targetGuid)
+		else
+			CastSpellByName("Execute")
+		end
 		return true
 	end
 
@@ -93,27 +104,25 @@ function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 		return false  -- Will cast next frame
 	end
 
-	-- Check if guid is current target
-	local _, targetGuid = UnitExists("target")
+	-- Check if guid is current target - still use explicit GUID!
 	if targetGuid == guid then
-		CastSpellByName("Execute")
+		CastSpellByName("Execute", targetGuid)
 		return true
 	end
 
-	-- SuperWoW GUID targeting
+	-- Casting on a different target than current (nameplate in execute range)
+	-- SuperWoW GUID targeting: CastSpellByName(spell, unit) works with GUIDs
+	-- The 2nd parameter accepts GUIDs in place of unit tokens ("target", "player")
 	local ok, err = pcall(function()
-		if CastSpellByNameAtUnit then
-			CastSpellByNameAtUnit("Execute", guid)
-		else
-			-- Fallback: target swap
-			local oldTarget = UnitGUID and UnitGUID("target") or targetGuid
-			TargetUnit(guid)
-			CastSpellByName("Execute")
-			if oldTarget then
-				TargetUnit(oldTarget)
-			end
-		end
+		CastSpellByName("Execute", guid)
 	end)
+
+	-- CRITICAL: After casting on nameplate, force auto-attack back to real target
+	-- SuperWoW changes attack target when using CastSpellByName with GUID
+	-- Must pass explicit GUID to avoid inheriting the nameplate as attack target
+	if ok and targetGuid then
+		AttackTarget(targetGuid)  -- Resume attacking the player's actual target
+	end
 
 	return ok
 end
@@ -266,21 +275,22 @@ function ATW.GUIDTargeting.CastRendOnGUID(guid)
 	-- NO PENDING ENTRY - SuperWoW's UNIT_CASTEVENT will confirm if cast succeeds
 	-- This is more robust than tracking cast attempts with arbitrary timeouts
 
-	-- SuperWoW allows targeting by GUID
+	-- Check if casting on a different target than current
+	local _, currentTargetGUID = UnitExists("target")
+	local castingOnDifferentTarget = (currentTargetGUID and guid ~= currentTargetGUID)
+
+	-- SuperWoW GUID targeting: CastSpellByName(spell, unit) works with GUIDs
+	-- The 2nd parameter accepts GUIDs in place of unit tokens ("target", "player")
 	local castOk, err = pcall(function()
-		-- Method 1: Direct GUID targeting (if supported)
-		if CastSpellByNameAtUnit then
-			CastSpellByNameAtUnit("Rend", guid)
-		else
-			-- Method 2: Target, cast, target back
-			local _, oldTarget = UnitExists("target")
-			TargetUnit(guid)
-			CastSpellByName("Rend")
-			if oldTarget then
-				TargetUnit(oldTarget)
-			end
-		end
+		CastSpellByName("Rend", guid)
 	end)
+
+	-- CRITICAL: After casting on nameplate, force auto-attack back to real target
+	-- SuperWoW changes attack target when using CastSpellByName with GUID
+	-- Must pass explicit GUID to avoid inheriting the nameplate as attack target
+	if castOk and castingOnDifferentTarget and currentTargetGUID then
+		AttackTarget(currentTargetGUID)  -- Resume attacking the player's actual target
+	end
 
 	return castOk
 end
