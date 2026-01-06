@@ -468,6 +468,53 @@ function ATW.HandleCommand(msg)
 			ATW.Print("Decision simulator not loaded")
 		end
 
+	elseif cmd == "racial" or cmd == "race" then
+		-- Show racial info
+		ATW.Print("--- Racial Abilities ---")
+		if not ATW.Racials then
+			ATW.Print("|cffff0000Racials not loaded (use /reload)|r")
+		else
+			local _, race = UnitRace("player")
+			ATW.Print("Race: |cff00ff00" .. (race or "Unknown") .. "|r")
+
+			-- Blood Fury (Orc)
+			if ATW.Racials.HasBloodFury then
+				local apBonus = ATW.GetBloodFuryAP and ATW.GetBloodFuryAP() or 0
+				local ready = ATW.IsRacialReady and ATW.IsRacialReady("Blood Fury")
+				local status = ready and "|cff00ff00READY|r" or "|cffff0000ON CD|r"
+				ATW.Print("Blood Fury: " .. status .. " (+|cffff8800" .. apBonus .. " AP|r for 15s)")
+			end
+
+			-- Berserking (Troll)
+			if ATW.Racials.HasBerserking then
+				local haste = ATW.GetBerserkingHaste and ATW.GetBerserkingHaste() or 10
+				local ready = ATW.IsRacialReady and ATW.IsRacialReady("Berserking")
+				local status = ready and "|cff00ff00READY|r" or "|cffff0000ON CD|r"
+				ATW.Print("Berserking: " .. status .. " (|cff00ffff" .. haste .. "% haste|r for 10s, 5 rage)")
+			end
+
+			-- Perception (Human)
+			if ATW.Racials.HasPerception then
+				local ready = ATW.IsRacialReady and ATW.IsRacialReady("Perception")
+				local status = ready and "|cff00ff00READY|r" or "|cffff0000ON CD|r"
+				ATW.Print("Perception: " .. status .. " (|cffffcc00+2% crit|r for 20s)")
+			end
+
+			-- Weapon skill bonus
+			if ATW.Racials.WeaponSkillBonus and ATW.Racials.WeaponSkillBonus > 0 then
+				local weapons = {}
+				if ATW.Racials.HasSwordSpec then table.insert(weapons, "Swords") end
+				if ATW.Racials.HasMaceSpec then table.insert(weapons, "Maces") end
+				if ATW.Racials.HasAxeSpec then table.insert(weapons, "Axes") end
+				ATW.Print("Weapon Skill: |cff00ff00+" .. ATW.Racials.WeaponSkillBonus .. "|r (" .. table.concat(weapons, ", ") .. ")")
+			end
+
+			-- No combat racials
+			if not ATW.Racials.HasBloodFury and not ATW.Racials.HasBerserking and not ATW.Racials.HasPerception then
+				ATW.Print("|cff888888No combat racials for " .. (race or "this race") .. "|r")
+			end
+		end
+
 	else
 		-- Help
 		ATW.Print("Commands:")
@@ -488,6 +535,7 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw mob - Show creature type detection")
 		ATW.Print("  /atw gear - Show set bonuses/trinkets")
 		ATW.Print("  /atw spells - Show spell ranks")
+		ATW.Print("  /atw racial - Show racial abilities")
 		ATW.Print("  /atw op - Debug Overpower status")
 		ATW.Print("  /atw stance | stats | ttd | swing | hp")
 	end

@@ -63,6 +63,7 @@ EventFrame:SetScript("OnEvent", function()
 		-- Initialize
 		ATW.LoadTalents()
 		ATW.LoadSpells()  -- Detect spell ranks (Rend duration, etc.)
+		ATW.LoadRacials()  -- Detect racial abilities (Blood Fury, Berserking, etc.)
 		ATW.AutoDetectPrimaryStance()
 		ATW.UpdateStats()
 		ATW.RegisterCommands()
@@ -103,6 +104,7 @@ EventFrame:SetScript("OnEvent", function()
 		-- Re-detect stances, talents, and spells when learning new abilities
 		ATW.LoadTalents()
 		ATW.LoadSpells()  -- Re-detect spell ranks (new Rend rank, etc.)
+		ATW.LoadRacials()  -- Re-detect racials (Blood Fury AP scales with level)
 		ATW.DetectStances()
 
 	elseif event == "CHAT_MSG_COMBAT_SELF_HITS" then

@@ -482,3 +482,154 @@ function ATW.LoadTalents()
 		ATW.Print("  AM: " .. (ATW.Talents.AngerManagement and "Yes" or "No"))
 	end
 end
+
+---------------------------------------
+-- Racial Ability Data (TurtleWoW values)
+-- Source: TurtleWoW Patch 1.17.2
+---------------------------------------
+ATW.RacialData = {
+	-- Blood Fury (Orc): +AP = level * 2, off GCD
+	BloodFury = {
+		name = "Blood Fury",
+		race = "Orc",
+		duration = 15,
+		cooldown = 120,
+		apBonus = function() return UnitLevel("player") * 2 end,  -- 120 AP at 60
+		offGCD = true,
+	},
+	-- Berserking (Troll): 10-15% haste based on HP, costs 5 rage
+	Berserking = {
+		name = "Berserking",
+		race = "Troll",
+		duration = 10,
+		cooldown = 180,
+		rageCost = 5,
+		hasteMin = 10,  -- At full HP
+		hasteMax = 15,  -- At low HP (TurtleWoW reduced from 30%)
+		offGCD = false,
+	},
+	-- Perception (Human): +2% crit (TurtleWoW bonus)
+	Perception = {
+		name = "Perception",
+		race = "Human",
+		duration = 20,
+		cooldown = 180,
+		critBonus = 2,  -- TurtleWoW: +2% physical and spell crit
+		offGCD = false,
+	},
+}
+
+---------------------------------------
+-- Detect player race and available racials
+---------------------------------------
+function ATW.LoadRacials()
+	ATW.Racials = ATW.Racials or {}
+
+	-- Get player race
+	local _, race = UnitRace("player")
+	ATW.Racials.Race = race
+
+	-- Check for racial abilities in spellbook
+	ATW.Racials.HasBloodFury = ATW.HasSpell("Blood Fury")
+	ATW.Racials.HasBerserking = ATW.HasSpell("Berserking")
+	ATW.Racials.HasPerception = ATW.HasSpell("Perception")
+
+	-- Weapon skill racials (TurtleWoW: +3 instead of +5)
+	ATW.Racials.HasSwordSpec = false  -- Human
+	ATW.Racials.HasMaceSpec = false   -- Human/Dwarf
+	ATW.Racials.HasAxeSpec = false    -- Orc
+
+	if race == "Human" then
+		ATW.Racials.HasSwordSpec = true
+		ATW.Racials.HasMaceSpec = true
+		ATW.Racials.WeaponSkillBonus = 3  -- TurtleWoW reduced from 5
+	elseif race == "Dwarf" then
+		ATW.Racials.HasMaceSpec = true
+		ATW.Racials.WeaponSkillBonus = 3
+	elseif race == "Orc" then
+		ATW.Racials.HasAxeSpec = true
+		ATW.Racials.WeaponSkillBonus = 3
+	else
+		ATW.Racials.WeaponSkillBonus = 0
+	end
+
+	-- Debug output
+	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+		ATW.Print("Racials loaded:")
+		ATW.Print("  Race: " .. (race or "Unknown"))
+		if ATW.Racials.HasBloodFury then
+			ATW.Print("  Blood Fury: YES (+AP=" .. ATW.RacialData.BloodFury.apBonus() .. ")")
+		end
+		if ATW.Racials.HasBerserking then
+			ATW.Print("  Berserking: YES (10-15% haste)")
+		end
+		if ATW.Racials.HasPerception then
+			ATW.Print("  Perception: YES (+2% crit)")
+		end
+		if ATW.Racials.WeaponSkillBonus > 0 then
+			ATW.Print("  Weapon Skill: +" .. ATW.Racials.WeaponSkillBonus)
+		end
+	end
+end
+
+---------------------------------------
+-- Get Blood Fury AP bonus (level-scaled)
+---------------------------------------
+function ATW.GetBloodFuryAP()
+	if not ATW.Racials or not ATW.Racials.HasBloodFury then
+		return 0
+	end
+	return UnitLevel("player") * 2
+end
+
+---------------------------------------
+-- Get Berserking haste % based on current HP
+-- TurtleWoW: 10% at full HP, 15% at low HP
+---------------------------------------
+function ATW.GetBerserkingHaste()
+	if not ATW.Racials or not ATW.Racials.HasBerserking then
+		return 0
+	end
+
+	local hp = UnitHealth("player")
+	local maxHp = UnitHealthMax("player")
+	if not hp or not maxHp or maxHp <= 0 then
+		return 10  -- Default to min
+	end
+
+	local hpPercent = hp / maxHp
+	-- Linear interpolation: 100% HP = 10%, 0% HP = 15%
+	local haste = 10 + (1 - hpPercent) * 5
+	return math.floor(haste)
+end
+
+---------------------------------------
+-- Get Perception crit bonus (TurtleWoW)
+---------------------------------------
+function ATW.GetPerceptionCrit()
+	if not ATW.Racials or not ATW.Racials.HasPerception then
+		return 0
+	end
+	return 2  -- +2% crit during Perception
+end
+
+---------------------------------------
+-- Check if a racial cooldown is ready
+---------------------------------------
+function ATW.IsRacialReady(racialName)
+	-- Check if we have the racial
+	if racialName == "Blood Fury" and not (ATW.Racials and ATW.Racials.HasBloodFury) then
+		return false
+	elseif racialName == "Berserking" and not (ATW.Racials and ATW.Racials.HasBerserking) then
+		return false
+	elseif racialName == "Perception" and not (ATW.Racials and ATW.Racials.HasPerception) then
+		return false
+	end
+
+	-- Check cooldown via GetSpellCooldown
+	if ATW.Ready then
+		return ATW.Ready(racialName)
+	end
+
+	return true  -- Assume ready if we can't check
+end

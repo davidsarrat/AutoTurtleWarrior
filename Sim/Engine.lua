@@ -99,6 +99,10 @@ Engine.BUFF_DURATIONS = {
 	SweepingStrikes = 0,    -- 5 charges
 	DeepWounds = 12000,     -- 12s DoT
 	Rend = 21000,           -- Default 21s DoT (actual duration from ATW.GetRendDuration())
+	-- Racial abilities (TurtleWoW values)
+	BloodFury = 15000,      -- 15s (Orc)
+	Berserking = 10000,     -- 10s (Troll)
+	Perception = 20000,     -- 20s (Human)
 }
 
 -- Buff effects (damage multipliers, etc)
@@ -108,6 +112,10 @@ Engine.BUFF_EFFECTS = {
 	Recklessness = { critbonus = 100 },   -- +100% crit
 	Flurry = { haste = 1.30 },            -- +30% attack speed
 	BattleShout = { ap = 232 },           -- +232 AP (Rank 7)
+	-- Racial effects (TurtleWoW values)
+	BloodFury = { ap = 120 },             -- +AP = level*2 (120 at 60), off GCD
+	Berserking = { haste = 1.10 },        -- 10-15% haste (use 10% base)
+	Perception = { critbonus = 2 },       -- +2% crit (TurtleWoW)
 }
 
 ---------------------------------------
@@ -247,6 +255,10 @@ function Engine.CreateState()
 			Pummel = 0,
 			Slam = 0,
 			Charge = 0,
+			-- Racial cooldowns
+			BloodFury = 0,
+			Berserking = 0,
+			Perception = 0,
 		},
 
 		-- Active buffs: {endTime, stacks, effect}
@@ -514,9 +526,14 @@ function Engine.GetCritChance(state, isAbility)
 	-- 	crit = crit + ATW.Talents.Cruelty
 	-- end
 
-	-- Recklessness
+	-- Recklessness (+100% crit)
 	if state.buffs.Recklessness and state.buffs.Recklessness.endTime > state.time then
 		crit = crit + 100
+	end
+
+	-- Perception (+2% crit - TurtleWoW Human racial)
+	if state.buffs.Perception and state.buffs.Perception.endTime > state.time then
+		crit = crit + 2
 	end
 
 	-- Overpower has +25/50% crit from Improved Overpower talent
@@ -544,27 +561,45 @@ function Engine.GetEffectiveAP(state)
 		ap = ap + 200
 	end
 
+	-- Blood Fury (Orc racial): +AP = level*2
+	if state.buffs.BloodFury and state.buffs.BloodFury.endTime > state.time then
+		local bfAP = ATW.GetBloodFuryAP and ATW.GetBloodFuryAP() or (UnitLevel("player") * 2)
+		ap = ap + bfAP
+	end
+
 	return ap
 end
 
 ---------------------------------------
--- Calculate haste modifier from Flurry
+-- Calculate haste modifier from Flurry and Berserking
 -- Flurry talent: +10/15/20/25/30% attack speed for 3 swings after crit
+-- Berserking (Troll racial): +10-15% haste for 10s
 ---------------------------------------
 function Engine.GetHasteMod(state)
+	local haste = 1.0
+
+	-- Flurry haste (stacks multiplicatively)
 	if state.flurryCharges > 0 then
-		-- Use talent-loaded Flurry value if available
 		local flurryPoints = (ATW.Talents and ATW.Talents.Flurry) or 5
 		local hastePercent = flurryPoints * 6  -- 6% per point: 6/12/18/24/30%
-		-- TurtleWoW might use different values, adjust as needed
-		-- Using 1.30 as the standard 5-point value
 		if flurryPoints >= 5 then
-			return 1.30
+			haste = haste * 1.30
 		else
-			return 1 + (hastePercent / 100)
+			haste = haste * (1 + (hastePercent / 100))
 		end
 	end
-	return 1.0
+
+	-- Berserking haste (Troll racial, stacks multiplicatively)
+	if state.buffs.Berserking and state.buffs.Berserking.endTime > state.time then
+		-- TurtleWoW: 10-15% based on HP (we use average 12.5% in sim)
+		local berserkHaste = 1.125
+		if ATW.GetBerserkingHaste then
+			berserkHaste = 1 + (ATW.GetBerserkingHaste() / 100)
+		end
+		haste = haste * berserkHaste
+	end
+
+	return haste
 end
 
 ---------------------------------------
@@ -1727,6 +1762,18 @@ function Engine.CaptureCurrentState()
 	state.hasBloodrageActive = ATW.Buff and ATW.Buff("player", "Ability_Racial_BloodRage")
 
 	---------------------------------------
+	-- RACIAL BUFF STATE
+	---------------------------------------
+	-- Blood Fury (Orc) - texture: Racial_Orc_BerserkerStrength
+	state.hasBloodFury = ATW.Buff and ATW.Buff("player", "Racial_Orc_BerserkerStrength")
+
+	-- Berserking (Troll) - texture: Racial_Troll_Berserk
+	state.hasBerserking = ATW.Buff and ATW.Buff("player", "Racial_Troll_Berserk")
+
+	-- Perception (Human) - texture: Spell_Nature_Sleep (TurtleWoW)
+	state.hasPerception = ATW.Buff and ATW.Buff("player", "Spell_Nature_Sleep")
+
+	---------------------------------------
 	-- INTERRUPT STATE (for Pummel)
 	---------------------------------------
 	state.shouldInterrupt = ATW.State and ATW.State.Interrupt or false
@@ -2108,8 +2155,9 @@ function Engine.GetValidActions(state)
 		for _, enemy in ipairs(state.enemies) do
 			-- Skip bleed immune targets
 			if not enemy.bleedImmune and not enemy.inExecute then
-				-- Only if Rend not active or about to expire (< 3s)
-				if not enemy.hasRend or enemy.rendRemaining < 3000 then
+				-- Only if Rend not active or will expire before next GCD completes
+				-- Threshold = GCD duration, so we refresh if we won't have time after this action
+				if not enemy.hasRend or enemy.rendRemaining < Engine.GCD then
 					-- NO HARDCODED THRESHOLDS - Let simulation decide if Rend is worth it
 					-- The GetActionDamage() function calculates actual damage based on TTD
 					-- and the simulation compares vs other abilities
@@ -2153,8 +2201,8 @@ function Engine.GetValidActions(state)
 		-- Fallback: Single target mode (no enemy list available)
 		-- SKIP if GCD is active (Rend is a GCD ability)
 		if not state.targetBleedImmune and not inExecute then
-			if not state.rendOnTarget or state.rendRemaining < 3000 then
-				-- NO HARDCODED THRESHOLDS - only require 1 tick minimum (3s TTD)
+			if not state.rendOnTarget or state.rendRemaining < Engine.GCD then
+				-- Refresh if < 1 GCD remaining (won't have time after next action)
 				local minTTDForAnyDamage = 3000
 				if state.targetTTD >= minTTDForAnyDamage then
 					if (stance == 1 or stance == 2) and rage >= rendCost then
@@ -2279,6 +2327,36 @@ function Engine.GetValidActions(state)
 				table.insert(actions, {name = "Recklessness", stance = 3, rage = 0, needsDance = false, offGCD = true})
 			-- Don't dance just for Recklessness - it's a long CD
 			end
+		end
+	end
+
+	---------------------------------------
+	-- RACIAL ABILITIES (TurtleWoW)
+	---------------------------------------
+
+	-- Blood Fury (Orc): +AP = level*2, OFF-GCD, 2min CD
+	if ATW.Racials and ATW.Racials.HasBloodFury then
+		local bfReady = (state.cooldowns.BloodFury or 0) <= 0
+		if bfReady and not state.hasBloodFury then
+			-- Blood Fury is off-GCD in TurtleWoW, usable in any stance
+			table.insert(actions, {name = "BloodFury", stance = stance, rage = 0, needsDance = false, offGCD = true})
+		end
+	end
+
+	-- Berserking (Troll): 10-15% haste, costs 5 rage, 3min CD
+	if ATW.Racials and ATW.Racials.HasBerserking then
+		local berserkReady = (state.cooldowns.Berserking or 0) <= 0
+		local berserkCost = 5
+		if berserkReady and not state.hasBerserking and rage >= berserkCost then
+			table.insert(actions, {name = "Berserking", stance = stance, rage = berserkCost, needsDance = false, offGCD = false})
+		end
+	end
+
+	-- Perception (Human): +2% crit for 20s, OFF-GCD, 3min CD
+	if ATW.Racials and ATW.Racials.HasPerception then
+		local percReady = (state.cooldowns.Perception or 0) <= 0
+		if percReady and not state.hasPerception then
+			table.insert(actions, {name = "Perception", stance = stance, rage = 0, needsDance = false, offGCD = true})
 		end
 	end
 
@@ -2528,6 +2606,38 @@ function Engine.GetActionDamage(state, action)
 		if state.shouldInterrupt then
 			damage = damage + 500  -- High priority when needed
 		end
+
+	---------------------------------------
+	-- RACIAL ABILITIES (damage value estimation)
+	---------------------------------------
+	elseif action.name == "BloodFury" then
+		-- Blood Fury: +AP = level*2 for 15s
+		-- Value = estimated damage increase from extra AP over duration
+		local apBonus = ATW.GetBloodFuryAP and ATW.GetBloodFuryAP() or 120
+		local horizonSec = math.min(15, Engine.DECISION_HORIZON / 1000)
+		-- AP to DPS conversion: ~1 DPS per 14 AP (rough estimate)
+		local dpsIncrease = apBonus / 14
+		damage = dpsIncrease * horizonSec * 0.8  -- High priority - it's free (off GCD, no rage)
+		canCrit = false
+
+	elseif action.name == "Berserking" then
+		-- Berserking: 10-15% haste for 10s
+		-- Value = more auto attacks = more rage + more damage
+		local hasteBonus = ATW.GetBerserkingHaste and ATW.GetBerserkingHaste() or 10
+		local horizonSec = math.min(10, Engine.DECISION_HORIZON / 1000)
+		local avgDmgPerSec = 400
+		-- Haste increases auto attack DPS by hasteBonus%
+		damage = avgDmgPerSec * horizonSec * (hasteBonus / 100) * 0.7
+		canCrit = false
+
+	elseif action.name == "Perception" then
+		-- Perception: +2% crit for 20s (TurtleWoW Human racial)
+		-- Value = estimated damage increase from crit bonus
+		local horizonSec = math.min(20, Engine.DECISION_HORIZON / 1000)
+		local avgDmgPerSec = 400
+		-- 2% more crits, crits do 2x damage, so ~2% more damage
+		damage = avgDmgPerSec * horizonSec * 0.02 * 0.9  -- High priority - free buff
+		canCrit = false
 	end
 
 	-- Apply crit expected value (for abilities that can crit)
@@ -2672,6 +2782,37 @@ function Engine.ApplyAction(state, action)
 		newState.cooldowns.Pummel = 10000  -- 10s CD
 		newState.shouldInterrupt = false  -- Interrupt consumed
 		newState.inCombat = true
+
+	---------------------------------------
+	-- RACIAL ABILITY EFFECTS
+	---------------------------------------
+	elseif action.name == "BloodFury" then
+		newState.cooldowns.BloodFury = 120000  -- 2 min CD
+		newState.hasBloodFury = true
+		newState.buffs.BloodFury = {
+			endTime = (newState.time or 0) + Engine.BUFF_DURATIONS.BloodFury,
+			stacks = 1,
+		}
+		-- AP bonus will be applied through buff effects
+		newState.inCombat = true
+
+	elseif action.name == "Berserking" then
+		newState.cooldowns.Berserking = 180000  -- 3 min CD
+		newState.hasBerserking = true
+		newState.buffs.Berserking = {
+			endTime = (newState.time or 0) + Engine.BUFF_DURATIONS.Berserking,
+			stacks = 1,
+		}
+		newState.inCombat = true
+
+	elseif action.name == "Perception" then
+		newState.cooldowns.Perception = 180000  -- 3 min CD
+		newState.hasPerception = true
+		newState.buffs.Perception = {
+			endTime = (newState.time or 0) + Engine.BUFF_DURATIONS.Perception,
+			stacks = 1,
+		}
+		-- Crit bonus applied through GetCritChance()
 	end
 
 	-- Advance time (except for off-GCD abilities)
