@@ -146,36 +146,17 @@ function ATW.Rotation()
 		end
 
 	-- GUID-based Rend (for spreading to specific targets)
-	-- Track Rend IMMEDIATELY on cast (optimistically) to prevent re-casting
-	-- Combat log will REMOVE tracking if resist/immune, or REFRESH if tick confirms
+	-- ROBUST: UNIT_CASTEVENT confirms successful casts automatically
+	-- No pending entries needed - SuperWoW tells us when cast succeeds
 	elseif abilityName == "Rend" then
 		if targetGUID and ATW.Engine and ATW.Engine.CastRendOnGUID then
 			-- Use GUID targeting to Rend specific mob
+			-- CastRendOnGUID verifies GCD and range before casting
 			ATW.Engine.CastRendOnGUID(targetGUID)
-			-- Track IMMEDIATELY (optimistically) - prevents re-casting before confirmation
-			if ATW.RendTracker then
-				ATW.RendTracker.OnRendApplied(targetGUID)
-			end
-			-- Store pending for combat log verification (in case of resist/immune)
-			ATW.State.PendingRendGUID = targetGUID
-			ATW.State.PendingRendTime = GetTime()
-			local ok, name = pcall(function() return UnitName(targetGUID) end)
-			ATW.State.PendingRendName = ok and name or nil
 		else
 			-- Fallback: cast on current target
+			-- No pending needed - UNIT_CASTEVENT will confirm if cast succeeds
 			ATW.Cast(ability.name, true)
-			-- Track IMMEDIATELY on current target
-			if ATW.HasSuperWoW and ATW.HasSuperWoW() then
-				local _, guid = UnitExists("target")
-				if guid then
-					if ATW.RendTracker then
-						ATW.RendTracker.OnRendApplied(guid)
-					end
-					ATW.State.PendingRendGUID = guid
-					ATW.State.PendingRendTime = GetTime()
-					ATW.State.PendingRendName = UnitName("target")
-				end
-			end
 		end
 		state.Dancing = true
 
@@ -195,12 +176,23 @@ function ATW.Rotation()
 		ATW.Cast(ability.name, true)
 		state.Dancing = true
 	elseif abilityName == "Overpower" then
-		ATW.Cast(ability.name, true)
-		state.Overpower = nil
-		state.Dancing = true
+		-- Use multi-target iteration: tries each nameplate until OP lands
+		-- Current target is tried first, then nameplates in melee range
+		if ATW.TryNextOverpower then
+			local attempted = ATW.TryNextOverpower()
+			if attempted then
+				state.Dancing = true
+			end
+		else
+			-- Fallback if iteration function not available
+			ATW.Cast(ability.name, true)
+			state.Overpower = nil
+			state.Dancing = true
+		end
 	elseif abilityName == "HeroicStrike" or abilityName == "Cleave" then
-		-- Swing queue ability
-		ATW.Cast(ability.name, true)
+		-- Swing queue ability - NO GUID targeting needed!
+		-- These modify your next auto-attack, not a targeted cast
+		CastSpellByName(ability.name)
 		ATW.OnSwingAbilityQueued(ability.name)
 	elseif abilityName == "Slam" then
 		-- Slam has cast time, use standard cast

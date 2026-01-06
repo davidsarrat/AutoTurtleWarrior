@@ -36,6 +36,17 @@ ATW.State = {
 }
 
 ---------------------------------------
+-- Overpower Multi-Target Iteration
+-- When a dodge happens, we don't know WHICH mob dodged
+-- This system tries Overpower on each nameplate until one works
+---------------------------------------
+ATW.OverpowerIteration = {
+	targets = {},      -- List of GUIDs to try
+	index = 0,         -- Current index in the list
+	lastBuild = 0,     -- When we last built the target list
+}
+
+---------------------------------------
 -- Talent Cache
 ---------------------------------------
 ATW.Talents = {

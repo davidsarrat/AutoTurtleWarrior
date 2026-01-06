@@ -336,10 +336,12 @@ function Engine.InitTargets(state)
 		target.hpDecayRate = 100 / target.ttd
 	end
 
-	-- Count rendable targets (not bleed immune, TTD > 15s)
+	-- Count rendable targets (not bleed immune, TTD > 6s for 2+ ticks)
+	-- TurtleWoW Rend DPR is excellent even with only 2 ticks
 	state.rendableTargets = 0
+	local minRendTTD = 6000  -- 6 seconds = 2 ticks minimum
 	for id, target in pairs(state.targets) do
-		if not target.bleedImmune and target.ttd >= 15000 then
+		if not target.bleedImmune and target.ttd >= minRendTTD then
 			state.rendableTargets = state.rendableTargets + 1
 		end
 	end
@@ -1668,6 +1670,23 @@ function Engine.CaptureCurrentState()
 	-- Current stance
 	state.stance = ATW.Stance and ATW.Stance() or 3
 
+	---------------------------------------
+	-- CAPTURE REAL GCD STATE
+	-- Check any GCD-triggering spell to detect active GCD
+	---------------------------------------
+	state.gcdEnd = 0
+	local gcdSpell = ATW.SpellID and (ATW.SpellID("Battle Shout") or ATW.SpellID("Heroic Strike") or ATW.SpellID("Rend"))
+	if gcdSpell then
+		local start, duration = GetSpellCooldown(gcdSpell, BOOKTYPE_SPELL)
+		-- GCD shows as a short cooldown (1.5s) vs longer ability CDs
+		if start and start > 0 and duration and duration > 0 and duration <= 1.5 then
+			local remaining = (start + duration) - GetTime()
+			if remaining > 0 then
+				state.gcdEnd = remaining * 1000  -- Convert to ms
+			end
+		end
+	end
+
 	-- Overpower window
 	if ATW.State and ATW.State.Overpower then
 		local windowRemaining = 4 - (GetTime() - ATW.State.Overpower)
@@ -1859,12 +1878,16 @@ end
 -- Get all valid actions from current state
 -- Properly accounts for stance requirements and TM rage cap
 -- ONLY includes abilities the player has actually learned
+-- Respects GCD - only returns off-GCD abilities when GCD is active
 ---------------------------------------
 function Engine.GetValidActions(state)
 	local actions = {}
 	local rage = state.rage
 	local stance = state.stance
 	local inExecute = state.targetHPPercent < 20
+
+	-- Check if GCD is active (from CaptureCurrentState)
+	local gcdActive = state.gcdEnd and state.gcdEnd > 0
 
 	-- Tactical Mastery: rage retained on stance switch
 	local tm = state.tacticalMastery or (ATW.Talents and ATW.Talents.TM) or 0
@@ -2070,18 +2093,23 @@ function Engine.GetValidActions(state)
 	---------------------------------------
 	-- MULTI-TARGET REND (stance: Battle/Defensive, 10 rage)
 	-- Generate Rend action for EACH enemy that needs it
+	-- SKIP if GCD is active (Rend is a GCD ability)
 	---------------------------------------
 	local rendCost = 10
 	local rendActionsAdded = {}  -- Track which targets we added Rend for
 
-	if hasSpell("Rend") and state.enemies and table.getn(state.enemies) > 0 then
+	if not gcdActive and hasSpell("Rend") and state.enemies and table.getn(state.enemies) > 0 then
 		for _, enemy in ipairs(state.enemies) do
 			-- Skip bleed immune targets
 			if not enemy.bleedImmune and not enemy.inExecute then
 				-- Only if Rend not active or about to expire (< 3s)
 				if not enemy.hasRend or enemy.rendRemaining < 3000 then
-					-- Check if worth applying (HP% >= 30%, TTD >= 9s for 3+ ticks)
-					if enemy.hpPercent >= 30 and enemy.ttd >= 9000 then
+					-- NO HARDCODED THRESHOLDS - Let simulation decide if Rend is worth it
+					-- The GetActionDamage() function calculates actual damage based on TTD
+					-- and the simulation compares vs other abilities
+					-- Only filter: target must survive at least 1 tick (3s) to do any damage
+					local minTTDForAnyDamage = 3000  -- 1 tick minimum
+					if enemy.ttd >= minTTDForAnyDamage then
 						-- Check melee range (5yd for Rend)
 						if enemy.distance <= 5 then
 							-- Add Rend action for this specific target
@@ -2115,11 +2143,14 @@ function Engine.GetValidActions(state)
 				end
 			end
 		end
-	elseif hasSpell("Rend") then
+	elseif not gcdActive and hasSpell("Rend") then
 		-- Fallback: Single target mode (no enemy list available)
+		-- SKIP if GCD is active (Rend is a GCD ability)
 		if not state.targetBleedImmune and not inExecute then
 			if not state.rendOnTarget or state.rendRemaining < 3000 then
-				if state.targetHPPercent >= 30 and state.targetTTD >= 9000 then
+				-- NO HARDCODED THRESHOLDS - only require 1 tick minimum (3s TTD)
+				local minTTDForAnyDamage = 3000
+				if state.targetTTD >= minTTDForAnyDamage then
 					if (stance == 1 or stance == 2) and rage >= rendCost then
 						table.insert(actions, {name = "Rend", stance = stance, rage = rendCost, needsDance = false})
 					elseif stance == 3 and canUse(1, rendCost) then
@@ -2183,12 +2214,23 @@ function Engine.GetValidActions(state)
 	---------------------------------------
 	-- Bloodrage (any stance, OFF-GCD, generates rage)
 	-- Critical for rage generation at pull and during combat
-	-- NO HP threshold - simulation decides optimal usage
+	-- IMPORTANT: Bloodrage ENTERS COMBAT - do NOT use if Charge is available!
 	---------------------------------------
 	if hasSpell("Bloodrage") then
 		local bloodrageReady = (state.cooldowns.Bloodrage or 0) <= 0
 		if bloodrageReady and not state.hasBloodrageActive then
-			table.insert(actions, {name = "Bloodrage", stance = stance, rage = 0, needsDance = false, offGCD = true})
+			-- Check if Charge is available - if so, DON'T use Bloodrage (it blocks Charge)
+			local chargeBlocked = false
+			if hasSpell("Charge") and not state.inCombat then
+				local chargeReady = (state.cooldowns.Charge or 0) <= 0
+				local inChargeRange = state.targetDistance and state.targetDistance >= 8 and state.targetDistance <= 25
+				if chargeReady and inChargeRange then
+					chargeBlocked = true  -- Don't use Bloodrage, Charge is better!
+				end
+			end
+			if not chargeBlocked then
+				table.insert(actions, {name = "Bloodrage", stance = stance, rage = 0, needsDance = false, offGCD = true})
+			end
 		end
 	end
 
@@ -2383,7 +2425,8 @@ function Engine.GetActionDamage(state, action)
 	elseif action.name == "Rend" then
 		-- Rend DoT - cannot crit
 		-- Calculate damage based on TARGET-SPECIFIC TTD if available
-		local tickDamage = ATW.GetRendTickDamage and ATW.GetRendTickDamage() or 33
+		-- TurtleWoW: 147 base / 7 ticks = 21 per tick (without talents)
+		local tickDamage = ATW.GetRendTickDamage and ATW.GetRendTickDamage() or 21
 		local maxTicks = ATW.GetRendTicks and ATW.GetRendTicks() or 7
 		local apPerTick = ap * 0.05
 		local tickTotal = tickDamage + apPerTick
@@ -2396,6 +2439,13 @@ function Engine.GetActionDamage(state, action)
 		if numTicks < 1 then numTicks = 1 end
 
 		damage = tickTotal * numTicks
+
+		-- Small bonus for main target (tiebreaker when damage is similar)
+		-- This prioritizes keeping Rend on your focus target
+		if action.isMainTarget then
+			damage = damage * 1.05  -- 5% bonus for main target
+		end
+
 		canCrit = false  -- DoTs don't crit in vanilla
 
 	elseif action.name == "HeroicStrike" then

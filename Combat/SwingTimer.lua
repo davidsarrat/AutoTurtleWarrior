@@ -294,6 +294,40 @@ function ATW.OnUnitCastEvent(casterGUID, targetGUID, eventType, spellID, duratio
 		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
 			ATW.Debug("OH swing")
 		end
+
+	elseif eventType == "CAST" then
+		---------------------------------------
+		-- SPELL CAST COMPLETED
+		-- SuperWoW tells us when our spells complete
+		-- Use this for ROBUST Rend tracking (no arbitrary timeouts!)
+		---------------------------------------
+		local spellName = nil
+		if spellID then
+			-- Get spell name from ID
+			local ok, name = pcall(function()
+				return SpellInfo(spellID)
+			end)
+			if ok then spellName = name end
+		end
+
+		-- Check if this is Rend
+		if spellName and spellName == "Rend" and targetGUID then
+			-- ROBUST CONFIRMATION: SuperWoW tells us Rend cast completed
+			-- This is instant (no 3s tick wait) and reliable (cast definitely happened)
+			if ATW.RendTracker and ATW.RendTracker.ConfirmRend then
+				-- Get target name for logging
+				local targetName = nil
+				local okName, name = pcall(function() return UnitName(targetGUID) end)
+				if okName then targetName = name end
+
+				-- Confirm immediately - cast completed successfully
+				ATW.RendTracker.ConfirmRend(targetGUID, targetName)
+
+				if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+					ATW.Debug("Rend CONFIRMED via UNIT_CASTEVENT on " .. (targetName or "?"))
+				end
+			end
+		end
 	end
 end
 

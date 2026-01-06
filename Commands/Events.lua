@@ -24,6 +24,9 @@ EventFrame:RegisterEvent("CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE")
 EventFrame:RegisterEvent("CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE")
 -- Rend periodic damage detection
 EventFrame:RegisterEvent("CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE")
+-- Rend failure detection (out of range, etc.)
+EventFrame:RegisterEvent("UI_ERROR_MESSAGE")
+EventFrame:RegisterEvent("CHAT_MSG_SPELL_FAILED_LOCALPLAYER")
 -- Stats updates
 EventFrame:RegisterEvent("UNIT_AURA")
 EventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
@@ -130,9 +133,13 @@ EventFrame:SetScript("OnEvent", function()
 					local _, _, name = strfind(arg1, "was dodged by (.+)%.$")
 					ATW.SetOverpowerProc(name)
 				end
-			elseif strfind(arg1, "Your Overpower") then
-				-- Overpower was used - clear the proc
-				state.Overpower = nil
+			elseif strfind(arg1, "Your Overpower") and strfind(arg1, "hits") then
+				-- Overpower HIT - clear the proc and iteration state
+				if ATW.OnOverpowerSuccess then
+					ATW.OnOverpowerSuccess()
+				else
+					state.Overpower = nil
+				end
 			end
 		end
 		-- Track swing timer (for HS/Cleave)
@@ -151,9 +158,21 @@ EventFrame:SetScript("OnEvent", function()
 		end
 
 	elseif event == "CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE" then
-		-- Detect Rend ticks to verify/refresh tracking
+		-- Detect Rend ticks to CONFIRM tracking
 		if arg1 and ATW.ParseRendCombatLog then
 			ATW.ParseRendCombatLog(arg1)
+		end
+
+	elseif event == "UI_ERROR_MESSAGE" then
+		-- Detect cast failures (out of range, etc.) to cancel pending Rends
+		if arg1 and ATW.ParseRendFailure then
+			ATW.ParseRendFailure(arg1)
+		end
+
+	elseif event == "CHAT_MSG_SPELL_FAILED_LOCALPLAYER" then
+		-- Detect "You failed to cast X" messages
+		if arg1 and ATW.ParseRendFailure then
+			ATW.ParseRendFailure(arg1)
 		end
 
 	-- Stats updates

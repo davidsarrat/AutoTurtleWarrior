@@ -114,8 +114,14 @@ end
 
 ---------------------------------------
 -- Check if unit/GUID has Rend specifically
--- Priority: SuperWoW UnitDebuff > RendTracker
--- This ensures we detect real debuffs even if tracking failed
+-- ROBUST DESIGN - Game API is the source of truth
+--
+-- For "target": ONLY use UnitDebuff - no tracker fallback
+-- For GUIDs: PRIMARY = UnitDebuff(guid), SECONDARY = RendTracker (CONFIRMED only)
+--
+-- NO PENDING ENTRIES - we only trust confirmed sources:
+-- 1. Game's debuff API (UnitDebuff)
+-- 2. Combat log confirmed entries (RendTracker.targets)
 ---------------------------------------
 function ATW.HasRend(unitOrGUID)
 	if not unitOrGUID then return false end
@@ -123,34 +129,37 @@ function ATW.HasRend(unitOrGUID)
 	-- Check if it's a standard unit ID
 	if unitOrGUID == "target" or unitOrGUID == "player" or
 	   unitOrGUID == "focus" or unitOrGUID == "mouseover" then
-		-- Standard debuff check first (most reliable)
-		if ATW.Debuff(unitOrGUID, "Ability_Gouge") then
-			return true
-		end
-		-- Fallback to tracker for target
-		if unitOrGUID == "target" and ATW.HasSuperWoW and ATW.HasSuperWoW() then
-			local _, guid = UnitExists("target")
-			if guid and ATW.RendTracker and ATW.RendTracker.HasRend(guid) then
-				return true
-			end
-		end
-		return false
+		-- ONLY use game's debuff API - this is the source of truth
+		-- No fallback to tracker - if the game says no debuff, there's no debuff
+		return ATW.Debuff(unitOrGUID, "Ability_Gouge") or false
 	end
 
-	-- Assume it's a GUID
-	-- Priority 1: SuperWoW UnitDebuff(guid) - most reliable
+	-- For GUIDs (nameplates):
+	-- Priority 1: SuperWoW UnitDebuff(guid) - game API is most reliable
 	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
 		local ok, hasDebuff = pcall(function()
-			return ATW.DebuffOnGUID(unitOrGUID, "Ability_Gouge")
+			local i = 1
+			while true do
+				local debuffTexture = UnitDebuff(unitOrGUID, i)
+				if not debuffTexture then break end
+				if strfind(debuffTexture, "Ability_Gouge") then
+					return true
+				end
+				i = i + 1
+			end
+			return false
 		end)
 		if ok and hasDebuff then
 			return true
 		end
 	end
 
-	-- Priority 2: RendTracker (fallback, may have slight delay)
-	if ATW.RendTracker then
-		return ATW.RendTracker.HasRend(unitOrGUID)
+	-- Priority 2: RendTracker CONFIRMED entries only (not pending!)
+	-- This catches cases where UnitDebuff(guid) doesn't work for nameplates
+	if ATW.RendTracker and ATW.RendTracker.HasRendConfirmed then
+		if ATW.RendTracker.HasRendConfirmed(unitOrGUID) then
+			return true
+		end
 	end
 
 	return false

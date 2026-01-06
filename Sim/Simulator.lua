@@ -857,8 +857,8 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 	local rendTargetTTDs = {}  -- Track TTD for each Rend target
 	if strategy == "rend_spread" and numEnemies >= 2 then
 		for i, enemy in ipairs(enemies) do
-			-- Skip bleed immune enemies
-			if not enemy.bleedImmune and enemy.ttd >= 15 and table.getn(rendTargets) < 4 then
+			-- Skip bleed immune enemies (6s minimum for 2+ ticks)
+			if not enemy.bleedImmune and enemy.ttd >= 6 and table.getn(rendTargets) < 4 then
 				table.insert(rendTargets, enemy.guid)
 				table.insert(rendTargetTTDs, enemy.ttd)
 			end
@@ -1235,10 +1235,10 @@ function ATW.FindOptimalStrategy()
 		return "normal", 0
 	end
 
-	-- Count targets worth Rending (TTD > 15s)
+	-- Count targets worth Rending (TTD > 6s for 2+ ticks)
 	local worthyTargets = 0
 	for _, enemy in ipairs(enemies) do
-		if enemy.ttd >= 15 then
+		if enemy.ttd >= 6 then
 			worthyTargets = worthyTargets + 1
 		end
 	end

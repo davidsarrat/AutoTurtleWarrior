@@ -2,95 +2,249 @@
 	Auto Turtle Warrior - Detection/AoE
 	AoE detection using nameplates and enemy counting
 	Includes per-GUID Rend tracking for multi-target spreading
+
+	REND TRACKING SYSTEM (Robust Combat Log Verification):
+	======================================================
+	1. On cast attempt: Store as PENDING (guid, time, name)
+	2. On combat log "X suffers Y from your Rend": CONFIRM pending -> add to tracker
+	3. On failure (out of range, resist, immune): CANCEL pending
+	4. Pending timeout (5s): Auto-cancel if no confirmation
+
+	This ensures we NEVER track a Rend that didn't actually apply.
 ]]--
 
 ---------------------------------------
+-- Rend Range Constant
+-- Rend has 5 yard range (melee)
+---------------------------------------
+ATW.REND_RANGE = 5
+
+---------------------------------------
 -- Per-GUID Rend Tracking
--- Tracks which targets have Rend applied (by us)
--- Format: {[guid] = {appliedAt, expiresAt}}
+-- Tracks which targets have Rend CONFIRMED via combat log
+-- Format: {[guid] = {appliedAt, expiresAt, name}}
 ---------------------------------------
 ATW.RendTracker = {
-	targets = {},
-	REND_DURATION = 21,  -- Rend lasts 21 seconds
+	targets = {},           -- Confirmed Rends
+	pending = {},           -- Pending confirmations: {[guid] = {time, name}}
+	REND_DURATION = 22,     -- TurtleWoW Rend lasts 22 seconds (ranks 5-7)
+	PENDING_TIMEOUT = 4,    -- Timeout for pending entries (first tick at 3s)
 }
 
--- Record that we applied Rend to a GUID
-function ATW.RendTracker.OnRendApplied(guid)
+---------------------------------------
+-- Record a PENDING Rend cast (not confirmed yet)
+-- Call this when we ATTEMPT to cast Rend on a GUID
+---------------------------------------
+function ATW.RendTracker.OnRendCastAttempt(guid, targetName)
 	if not guid then return end
 
 	local now = GetTime()
-	ATW.RendTracker.targets[guid] = {
-		appliedAt = now,
-		expiresAt = now + ATW.RendTracker.REND_DURATION,
+	ATW.RendTracker.pending[guid] = {
+		time = now,
+		name = targetName,
 	}
 
-	-- Debug: show full GUID being stored
 	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
-		ATW.Debug("RendTracker: STORED guid=" .. guid)
+		ATW.Debug("RendTracker: PENDING cast on " .. (targetName or "?") .. " [" .. string.sub(guid, 1, 8) .. "]")
 	end
 end
 
--- Check if GUID has Rend (that hasn't expired)
-function ATW.RendTracker.HasRend(guid)
+---------------------------------------
+-- CONFIRM a Rend via combat log tick
+-- Call this when we see "X suffers Y damage from your Rend"
+---------------------------------------
+function ATW.RendTracker.ConfirmRend(guid, targetName)
 	if not guid then return false end
 
-	local data = ATW.RendTracker.targets[guid]
-	if not data then
-		-- Debug: show GUID not found
-		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
-			ATW.Debug("RendTracker: CHECK guid=" .. guid .. " -> NOT FOUND")
-		end
-		return false
-	end
-
 	local now = GetTime()
-	if now >= data.expiresAt then
-		-- Expired, clean up
-		ATW.RendTracker.targets[guid] = nil
-		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
-			ATW.Debug("RendTracker: CHECK guid=" .. guid .. " -> EXPIRED")
-		end
-		return false
-	end
+	local duration = ATW.GetRendDuration and ATW.GetRendDuration() or ATW.RendTracker.REND_DURATION
 
-	-- Debug: show GUID found with time remaining
+	-- Add/refresh in confirmed targets
+	ATW.RendTracker.targets[guid] = {
+		appliedAt = now,
+		expiresAt = now + duration,
+		name = targetName,
+	}
+
+	-- Remove from pending
+	ATW.RendTracker.pending[guid] = nil
+
 	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
-		local remaining = data.expiresAt - now
-		ATW.Debug("RendTracker: CHECK guid=" .. guid .. " -> HAS REND (" .. string.format("%.1f", remaining) .. "s)")
+		ATW.Debug("RendTracker: CONFIRMED on " .. (targetName or "?") .. " [" .. string.sub(guid, 1, 8) .. "] (" .. duration .. "s)")
 	end
 
 	return true
 end
 
+---------------------------------------
+-- CANCEL a pending Rend (failed to apply)
+-- Call this on resist, immune, out of range, etc.
+---------------------------------------
+function ATW.RendTracker.CancelPending(guid)
+	if not guid then return end
+
+	local pending = ATW.RendTracker.pending[guid]
+	if pending then
+		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+			ATW.Debug("RendTracker: CANCELLED pending on " .. (pending.name or "?") .. " [" .. string.sub(guid, 1, 8) .. "]")
+		end
+		ATW.RendTracker.pending[guid] = nil
+	end
+end
+
+---------------------------------------
+-- Legacy function: Record that we applied Rend to a GUID
+-- NOW: This just creates a PENDING entry, not confirmed
+---------------------------------------
+function ATW.RendTracker.OnRendApplied(guid)
+	if not guid then return end
+
+	-- Get target name for verification
+	local name = nil
+	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+		local ok, result = pcall(function() return UnitName(guid) end)
+		if ok then name = result end
+	end
+
+	-- Create pending entry (will be confirmed by combat log)
+	ATW.RendTracker.OnRendCastAttempt(guid, name)
+end
+
+---------------------------------------
+-- Check if GUID has CONFIRMED Rend (combat log verified)
+-- This is the ROBUST method - only returns true for verified Rends
+-- Used by the main HasRend() in Helpers.lua as secondary source
+---------------------------------------
+function ATW.RendTracker.HasRendConfirmed(guid)
+	if not guid then return false end
+
+	local now = GetTime()
+
+	-- ONLY check confirmed targets (combat log verified)
+	local data = ATW.RendTracker.targets[guid]
+	if data then
+		if now < data.expiresAt then
+			return true  -- Confirmed and not expired
+		else
+			-- Expired, clean up
+			ATW.RendTracker.targets[guid] = nil
+		end
+	end
+
+	return false
+end
+
+---------------------------------------
+-- Check if GUID has Rend (confirmed OR recent pending)
+-- LEGACY - kept for backwards compatibility
+-- PREFER HasRendConfirmed() for robust checks
+---------------------------------------
+function ATW.RendTracker.HasRend(guid)
+	if not guid then return false end
+
+	-- First check confirmed
+	if ATW.RendTracker.HasRendConfirmed(guid) then
+		return true
+	end
+
+	-- Check PENDING entries (short window to prevent spam-casting)
+	-- This is a SOFT check - use HasRendConfirmed for robust checks
+	local pending = ATW.RendTracker.pending[guid]
+	if pending then
+		local now = GetTime()
+		local age = now - pending.time
+		local timeout = ATW.RendTracker.PENDING_TIMEOUT or 4
+		if age < timeout then
+			return true
+		else
+			-- Timed out - cast probably failed
+			ATW.RendTracker.pending[guid] = nil
+		end
+	end
+
+	return false
+end
+
+---------------------------------------
 -- Get remaining Rend duration on GUID
+-- Returns duration for confirmed Rends, or estimated for pending
+---------------------------------------
 function ATW.RendTracker.GetRendRemaining(guid)
 	if not guid then return 0 end
 
-	local data = ATW.RendTracker.targets[guid]
-	if not data then return 0 end
+	local now = GetTime()
 
-	local remaining = data.expiresAt - GetTime()
-	if remaining < 0 then
-		ATW.RendTracker.targets[guid] = nil
-		return 0
+	-- Check confirmed targets
+	local data = ATW.RendTracker.targets[guid]
+	if data then
+		local remaining = data.expiresAt - now
+		if remaining > 0 then
+			return remaining
+		else
+			ATW.RendTracker.targets[guid] = nil
+		end
 	end
 
-	return remaining
+	-- Check pending (assume full duration if recently cast)
+	local pending = ATW.RendTracker.pending[guid]
+	if pending then
+		local age = now - pending.time
+		if age < 5 then
+			-- Estimate remaining: full duration minus age
+			local duration = ATW.GetRendDuration and ATW.GetRendDuration() or ATW.RendTracker.REND_DURATION
+			return math.max(0, duration - age)
+		else
+			ATW.RendTracker.pending[guid] = nil
+		end
+	end
+
+	return 0
 end
 
--- Clean up expired entries
+---------------------------------------
+-- Clean up expired entries (confirmed and pending)
+---------------------------------------
 function ATW.RendTracker.Cleanup()
 	local now = GetTime()
+
+	-- Cleanup confirmed targets
 	for guid, data in pairs(ATW.RendTracker.targets) do
 		if now >= data.expiresAt then
 			ATW.RendTracker.targets[guid] = nil
 		end
 	end
+
+	-- Cleanup stale pending entries (>5s old)
+	for guid, pending in pairs(ATW.RendTracker.pending) do
+		if now - pending.time >= 5 then
+			ATW.RendTracker.pending[guid] = nil
+		end
+	end
 end
 
+---------------------------------------
 -- Reset all tracking (on combat end, etc.)
+---------------------------------------
 function ATW.RendTracker.Reset()
 	ATW.RendTracker.targets = {}
+	ATW.RendTracker.pending = {}
+end
+
+---------------------------------------
+-- Find pending entry by target name
+-- Used when combat log doesn't have GUID
+-- Returns: guid or nil
+---------------------------------------
+function ATW.RendTracker.FindPendingByName(targetName)
+	if not targetName then return nil end
+
+	local now = GetTime()
+	for guid, pending in pairs(ATW.RendTracker.pending) do
+		if pending.name == targetName and (now - pending.time) < 5 then
+			return guid
+		end
+	end
+	return nil
 end
 
 -- Expose globally for convenience
@@ -110,88 +264,52 @@ end
 
 ---------------------------------------
 -- Combat Log Rend Detection
--- Parses combat log to verify Rend is ticking
--- This catches Rend applied by other means or refreshes tracking
+-- Parses combat log to CONFIRM Rend ticks
+-- This is the ONLY way Rends get confirmed in the tracker
 ---------------------------------------
 function ATW.ParseRendCombatLog(msg)
 	if not msg then return end
 
 	-- Pattern: "X suffers Y damage from your Rend."
 	-- This fires every 3 seconds when Rend is active
-	-- Note: Lua 5.0 doesn't have string.match, use string.find with captures
 	local _, _, targetName = string.find(msg, "^(.+) suffers %d+ damage from your Rend")
 
 	if targetName then
-		-- Check if we have a pending Rend cast waiting for confirmation
-		-- This is the KEY to handling multiple mobs with same name:
-		-- We use the EXACT GUID we stored at cast time, verified by name match
-		if ATW.State and ATW.State.PendingRendGUID then
-			local pendingTime = ATW.State.PendingRendTime or 0
-			local pendingName = ATW.State.PendingRendName
+		-- Find the pending entry for this target name
+		-- This handles same-name mobs by using the GUID we stored at cast time
+		local pendingGUID = ATW.RendTracker.FindPendingByName(targetName)
 
-			-- Only use pending if within 5 seconds (first tick is at 3s, with some margin)
-			if GetTime() - pendingTime < 5 then
-				-- Name must match exactly - this confirms it's OUR cast
-				if pendingName and pendingName == targetName then
-					-- CONFIRM: Use the exact GUID we saved at cast time
-					ATW.RendTracker.OnRendApplied(ATW.State.PendingRendGUID)
-
-					if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
-						local shortGUID = string.sub(ATW.State.PendingRendGUID, 1, 8)
-						ATW.Print("Rend CONFIRMED: " .. targetName .. " [" .. shortGUID .. "]")
-					end
-
-					-- Clear pending - successfully confirmed
-					ATW.State.PendingRendGUID = nil
-					ATW.State.PendingRendTime = nil
-					ATW.State.PendingRendName = nil
-					return true
-				end
-			else
-				-- Pending expired, clear it
-				ATW.State.PendingRendGUID = nil
-				ATW.State.PendingRendTime = nil
-				ATW.State.PendingRendName = nil
-			end
+		if pendingGUID then
+			-- CONFIRM the pending Rend
+			ATW.RendTracker.ConfirmRend(pendingGUID, targetName)
+			return true
 		end
 
-		-- No pending or name didn't match - this is a tick from an already-tracked Rend
-		-- We do NOT update the tracker here because:
-		-- 1. We can't reliably identify WHICH mob if there are duplicates
-		-- 2. The tracker already has the correct 21s duration from initial confirmation
-		-- 3. This avoids incorrectly refreshing the wrong mob's timer
+		-- No pending found - check if this refreshes an existing confirmed Rend
+		-- For existing tracked Rends, the tick just confirms it's still active
+		-- (no action needed, timer was set correctly at confirmation)
 
 		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
-			ATW.Debug("Rend tick (already tracked): " .. targetName)
+			ATW.Debug("Rend tick: " .. targetName .. " (already confirmed or not ours)")
 		end
 
 		return true
 	end
 
 	-- Pattern: "Your Rend was resisted by X" or "Your Rend failed. X is immune."
-	-- Note: Lua 5.0 doesn't have string.match, use string.find with captures
 	local _, _, resistedTarget = string.find(msg, "Your Rend was resisted by (.+)")
 	local _, _, immuneTarget = string.find(msg, "Your Rend failed%. (.+) is immune")
 
 	if resistedTarget or immuneTarget then
 		local failedTarget = resistedTarget or immuneTarget
 
-		-- Remove tracking if the failed target matches our pending name
-		-- Since we now track immediately on cast, we need to REMOVE on failure
-		if ATW.State and ATW.State.PendingRendName == failedTarget then
-			-- CRITICAL: Remove from tracker (we added optimistically on cast)
-			if ATW.State.PendingRendGUID and ATW.RendTracker then
-				ATW.RendTracker.targets[ATW.State.PendingRendGUID] = nil
-				if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
-					ATW.Debug("RendTracker: REMOVED (failed) guid=" .. ATW.State.PendingRendGUID)
-				end
-			end
-			ATW.State.PendingRendGUID = nil
-			ATW.State.PendingRendTime = nil
-			ATW.State.PendingRendName = nil
+		-- Find and cancel the pending entry for this target
+		local pendingGUID = ATW.RendTracker.FindPendingByName(failedTarget)
+		if pendingGUID then
+			ATW.RendTracker.CancelPending(pendingGUID)
 
 			if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
-				ATW.Print("Rend FAILED: " .. failedTarget)
+				ATW.Print("Rend FAILED (resist/immune): " .. failedTarget)
 			end
 		end
 
@@ -202,25 +320,72 @@ function ATW.ParseRendCombatLog(msg)
 end
 
 ---------------------------------------
+-- Parse UI Error Messages for Rend failure
+-- Called from Events.lua on UI_ERROR_MESSAGE
+-- Handles: "Out of range", "Target not in line of sight", etc.
+---------------------------------------
+function ATW.ParseRendFailure(errorMsg)
+	if not errorMsg then return end
+
+	-- Check for failure messages that would affect our pending Rend
+	local isFailure = strfind(errorMsg, "Out of range") or
+	                  strfind(errorMsg, "not in line of sight") or
+	                  strfind(errorMsg, "facing the wrong way") or
+	                  strfind(errorMsg, "Invalid target") or
+	                  strfind(errorMsg, "No target")
+
+	if isFailure then
+		-- Check if we have any recent pending Rends (within 1 second)
+		-- The error comes immediately after cast attempt
+		local now = GetTime()
+		for guid, pending in pairs(ATW.RendTracker.pending) do
+			if now - pending.time < 1 then
+				ATW.RendTracker.CancelPending(guid)
+
+				if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+					ATW.Print("Rend FAILED (UI error): " .. errorMsg)
+				end
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+---------------------------------------
 -- Debug: Print Rend tracker status
+-- Shows both CONFIRMED and PENDING entries
 ---------------------------------------
 function ATW.PrintRendTracker()
 	ATW.Print("=== Rend Tracker ===")
 
-	local count = 0
 	local now = GetTime()
 
+	-- Show CONFIRMED Rends
+	local confirmedCount = 0
 	for guid, data in pairs(ATW.RendTracker.targets) do
-		count = count + 1
+		confirmedCount = confirmedCount + 1
 		local remaining = data.expiresAt - now
 		local shortGUID = string.sub(guid, 1, 12) .. "..."
-		ATW.Print("  " .. shortGUID .. ": " .. string.format("%.1f", remaining) .. "s remaining")
+		local nameStr = data.name and (" (" .. data.name .. ")") or ""
+		ATW.Print("  |cff00ff00CONFIRMED|r " .. shortGUID .. nameStr .. ": " .. string.format("%.1f", remaining) .. "s")
 	end
 
-	if count == 0 then
+	-- Show PENDING Rends
+	local pendingCount = 0
+	for guid, pending in pairs(ATW.RendTracker.pending) do
+		pendingCount = pendingCount + 1
+		local age = now - pending.time
+		local shortGUID = string.sub(guid, 1, 12) .. "..."
+		local nameStr = pending.name and (" (" .. pending.name .. ")") or ""
+		ATW.Print("  |cffffff00PENDING|r " .. shortGUID .. nameStr .. ": " .. string.format("%.1f", age) .. "s ago")
+	end
+
+	if confirmedCount == 0 and pendingCount == 0 then
 		ATW.Print("  (no targets tracked)")
 	else
-		ATW.Print("Total: " .. count .. " targets")
+		ATW.Print("Total: " .. confirmedCount .. " confirmed, " .. pendingCount .. " pending")
 	end
 end
 

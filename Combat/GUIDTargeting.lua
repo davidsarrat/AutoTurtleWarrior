@@ -202,7 +202,7 @@ function ATW.GUIDTargeting.GetNextRendTarget()
 			isImmune = ATW.IsBleedImmuneGUID(enemy.guid)
 		end
 
-		if not isImmune and enemy.ttd >= 15 then
+		if not isImmune and enemy.ttd >= 6 then  -- 6s minimum for 2+ ticks
 			-- Check if already has Rend (would need debuff tracking per GUID)
 			-- For now, prioritize by TTD
 			if enemy.ttd > bestTTD then
@@ -224,10 +224,35 @@ end
 ---------------------------------------
 -- Cast Rend on GUID (SuperWoW feature)
 -- Uses CastSpellByName with GUID targeting
+-- IMPORTANT: Verifies range (5yd) AND GCD before casting
+--
+-- ROBUST DESIGN: No pending entries needed!
+-- SuperWoW's UNIT_CASTEVENT will confirm the cast automatically
+-- if it succeeds, eliminating the need for arbitrary timeouts.
 ---------------------------------------
 function ATW.GUIDTargeting.CastRendOnGUID(guid)
 	if not guid then return false end
 	if not ATW.HasSuperWoW or not ATW.HasSuperWoW() then return false end
+
+	-- CRITICAL: Verify GCD is ready before casting
+	if ATW.Ready and not ATW.Ready("Rend") then
+		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+			ATW.Debug("Rend BLOCKED: GCD or spell CD active")
+		end
+		return false  -- GCD active, don't attempt
+	end
+
+	-- CRITICAL: Verify distance BEFORE casting (Rend is 5yd range)
+	local rendRange = ATW.REND_RANGE or 5
+	if ATW.GetDistance then
+		local distance = ATW.GetDistance(guid)
+		if distance and distance > rendRange then
+			if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+				ATW.Debug("Rend BLOCKED: " .. string.format("%.1f", distance) .. "yd > " .. rendRange .. "yd")
+			end
+			return false  -- Out of range, don't attempt cast
+		end
+	end
 
 	local currentStance = ATW.Stance and ATW.Stance() or 3
 
@@ -238,8 +263,11 @@ function ATW.GUIDTargeting.CastRendOnGUID(guid)
 		return false  -- Will cast next frame after stance switch
 	end
 
+	-- NO PENDING ENTRY - SuperWoW's UNIT_CASTEVENT will confirm if cast succeeds
+	-- This is more robust than tracking cast attempts with arbitrary timeouts
+
 	-- SuperWoW allows targeting by GUID
-	local ok, err = pcall(function()
+	local castOk, err = pcall(function()
 		-- Method 1: Direct GUID targeting (if supported)
 		if CastSpellByNameAtUnit then
 			CastSpellByNameAtUnit("Rend", guid)
@@ -254,7 +282,7 @@ function ATW.GUIDTargeting.CastRendOnGUID(guid)
 		end
 	end)
 
-	return ok
+	return castOk
 end
 
 -- Note: Engine.lua creates aliases to these functions

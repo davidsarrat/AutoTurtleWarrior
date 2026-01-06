@@ -423,8 +423,10 @@ Abilities.Rend = {
 		end
 
 		-- Single target mode: don't use on targets that will die soon
+		-- Minimum 2 ticks (6s) is still 19+ DPR with TurtleWoW AP scaling
 		local ttd = ATW.GetTargetTTD and ATW.GetTargetTTD() or 30
-		if ttd < 15 then return false end
+		local minTTD = 6  -- 2 ticks minimum (still good DPR in TurtleWoW)
+		if ttd < minTTD then return false end
 
 		-- Don't use if already applied (uses RendTracker + UnitDebuff)
 		if ATW.HasRend and ATW.HasRend("target") then
