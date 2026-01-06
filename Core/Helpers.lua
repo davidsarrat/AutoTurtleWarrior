@@ -113,52 +113,56 @@ function ATW.DebuffOnGUID(guid, texture)
 end
 
 ---------------------------------------
--- Check if unit/GUID has Rend specifically
--- ROBUST DESIGN - Game API is the source of truth
+-- Check if unit/GUID has OUR Rend specifically
+-- ROBUST DESIGN - Only track OUR Rends, not other warriors'
 --
--- For "target": ONLY use UnitDebuff - no tracker fallback
--- For GUIDs: PRIMARY = UnitDebuff(guid), SECONDARY = RendTracker (CONFIRMED only)
+-- We use RendTracker which is populated via:
+-- 1. UNIT_CASTEVENT (SuperWoW) - instant confirmation when WE cast Rend
+-- 2. Combat log "X suffers Y from your Rend" - periodic tick confirmation
 --
--- NO PENDING ENTRIES - we only trust confirmed sources:
--- 1. Game's debuff API (UnitDebuff)
--- 2. Combat log confirmed entries (RendTracker.targets)
+-- UnitDebuff CAN'T distinguish between our Rend and another warrior's Rend,
+-- so we only use it as a last resort fallback when GUID isn't available.
 ---------------------------------------
 function ATW.HasRend(unitOrGUID)
 	if not unitOrGUID then return false end
 
-	-- Check if it's a standard unit ID
+	local guid = nil
+
+	-- Convert unit ID to GUID if needed
 	if unitOrGUID == "target" or unitOrGUID == "player" or
 	   unitOrGUID == "focus" or unitOrGUID == "mouseover" then
-		-- ONLY use game's debuff API - this is the source of truth
-		-- No fallback to tracker - if the game says no debuff, there's no debuff
-		return ATW.Debuff(unitOrGUID, "Ability_Gouge") or false
+		-- Get GUID for this unit using SuperWoW
+		if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+			local ok, result = pcall(function()
+				return UnitGUID(unitOrGUID)
+			end)
+			if ok and result then
+				guid = result
+			end
+		end
+	else
+		-- It's already a GUID
+		guid = unitOrGUID
 	end
 
-	-- For GUIDs (nameplates):
-	-- Priority 1: SuperWoW UnitDebuff(guid) - game API is most reliable
-	if ATW.HasSuperWoW and ATW.HasSuperWoW() then
-		local ok, hasDebuff = pcall(function()
-			local i = 1
-			while true do
-				local debuffTexture = UnitDebuff(unitOrGUID, i)
-				if not debuffTexture then break end
-				if strfind(debuffTexture, "Ability_Gouge") then
-					return true
-				end
-				i = i + 1
-			end
-			return false
-		end)
-		if ok and hasDebuff then
+	-- PRIMARY: Check RendTracker (ONLY tracks OUR Rends)
+	-- This is the ONLY reliable way to know if WE have Rend on a target
+	-- Other warriors' Rends won't be in our tracker
+	if guid and ATW.RendTracker then
+		if ATW.RendTracker.HasRend(guid) then
 			return true
 		end
 	end
 
-	-- Priority 2: RendTracker CONFIRMED entries only (not pending!)
-	-- This catches cases where UnitDebuff(guid) doesn't work for nameplates
-	if ATW.RendTracker and ATW.RendTracker.HasRendConfirmed then
-		if ATW.RendTracker.HasRendConfirmed(unitOrGUID) then
-			return true
+	-- FALLBACK: If we couldn't get GUID (no SuperWoW), use UnitDebuff
+	-- WARNING: This can't distinguish between our Rend and other warriors'!
+	-- This is only for non-SuperWoW clients (rare case)
+	if not guid then
+		if unitOrGUID == "target" or unitOrGUID == "focus" or unitOrGUID == "mouseover" then
+			if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+				ATW.Debug("HasRend: No GUID - using UnitDebuff fallback (may see other warriors' Rend)")
+			end
+			return ATW.Debuff(unitOrGUID, "Ability_Gouge") or false
 		end
 	end
 

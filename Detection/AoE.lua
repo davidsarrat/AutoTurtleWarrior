@@ -27,7 +27,7 @@ ATW.REND_RANGE = 5
 ATW.RendTracker = {
 	targets = {},           -- Confirmed Rends
 	pending = {},           -- Pending confirmations: {[guid] = {time, name}}
-	REND_DURATION = 22,     -- TurtleWoW Rend lasts 22 seconds (ranks 5-7)
+	REND_DURATION = 22,     -- TurtleWoW Rend max rank lasts 22 seconds (updated by LoadSpells)
 	PENDING_TIMEOUT = 4,    -- Timeout for pending entries (first tick at 3s)
 }
 
