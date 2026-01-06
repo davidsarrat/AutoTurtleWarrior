@@ -1125,8 +1125,8 @@ function Engine.ApplyRend(state, targetId)
 	local baseTickDmg = ATW.GetRendTickDamage and ATW.GetRendTickDamage() or 21
 	local tickDamage = baseTickDmg + (Engine.GetEffectiveAP(state) * Engine.REND_AP_COEFF)
 
-	-- Duration from spell rank (9/12/15/18/21 seconds)
-	local duration = ATW.GetRendDuration and ATW.GetRendDuration() or 21
+	-- Duration from cached spell rank (set by LoadSpells)
+	local duration = (ATW.RendDuration and ATW.RendDuration > 0) and ATW.RendDuration or 22
 	local durationMs = duration * 1000
 
 	state.dots.rend[targetId] = {
@@ -1865,7 +1865,8 @@ function Engine.CaptureCurrentState()
 			end
 			-- If tracker has no info but Rend is active, assume full duration
 			if state.rendRemaining <= 0 then
-				state.rendRemaining = (ATW.GetRendDuration and ATW.GetRendDuration() or 22) * 1000
+				local rendDur = (ATW.RendDuration and ATW.RendDuration > 0) and ATW.RendDuration or 22
+				state.rendRemaining = rendDur * 1000
 			end
 		end
 	else
@@ -2754,7 +2755,8 @@ function Engine.ApplyAction(state, action)
 
 	elseif action.name == "Rend" then
 		-- MULTI-TARGET REND: Update specific enemy's state if targetGUID provided
-		local rendDuration = (ATW.GetRendDuration and ATW.GetRendDuration() or 22) * 1000
+		local rendDur = (ATW.RendDuration and ATW.RendDuration > 0) and ATW.RendDuration or 22
+		local rendDuration = rendDur * 1000
 		newState.inCombat = true
 
 		if action.targetGUID and newState.enemies then

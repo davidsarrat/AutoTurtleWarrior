@@ -17,6 +17,7 @@ EventFrame:RegisterEvent("PLAYER_LEAVE_COMBAT")
 EventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 EventFrame:RegisterEvent("PLAYER_LEVEL_UP")
 EventFrame:RegisterEvent("SPELLS_CHANGED")
+EventFrame:RegisterEvent("CHARACTER_POINTS_CHANGED")  -- Talent points spent/refunded
 EventFrame:RegisterEvent("CHAT_MSG_COMBAT_SELF_HITS")
 EventFrame:RegisterEvent("CHAT_MSG_COMBAT_SELF_MISSES")
 EventFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
@@ -100,10 +101,13 @@ EventFrame:SetScript("OnEvent", function()
 		state.Dancing = nil
 		state.OldStance = nil
 
-	elseif event == "PLAYER_LEVEL_UP" or event == "SPELLS_CHANGED" then
-		-- Re-detect stances, talents, and spells when learning new abilities
+	elseif event == "PLAYER_LEVEL_UP" or event == "SPELLS_CHANGED" or event == "CHARACTER_POINTS_CHANGED" then
+		-- Re-detect stances, talents, and spells when:
+		-- - Leveling up (new spell ranks, more talent points)
+		-- - Learning new spells
+		-- - Spending/refunding talent points
 		ATW.LoadTalents()
-		ATW.LoadSpells()  -- Re-detect spell ranks (new Rend rank, etc.)
+		ATW.LoadSpells()  -- Re-detect spell ranks (new Rend rank, etc.) + cache Rend values
 		ATW.LoadRacials()  -- Re-detect racials (Blood Fury AP scales with level)
 		ATW.DetectStances()
 

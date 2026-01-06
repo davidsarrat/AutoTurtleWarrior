@@ -57,7 +57,8 @@ function ATW.RendTracker.ConfirmRend(guid, targetName)
 	if not guid then return false end
 
 	local now = GetTime()
-	local duration = ATW.GetRendDuration and ATW.GetRendDuration() or ATW.RendTracker.REND_DURATION
+	-- Use cached duration (set by LoadSpells), fallback to tracker default
+	local duration = (ATW.RendDuration and ATW.RendDuration > 0) and ATW.RendDuration or ATW.RendTracker.REND_DURATION
 
 	-- Add/refresh in confirmed targets
 	ATW.RendTracker.targets[guid] = {
@@ -191,7 +192,7 @@ function ATW.RendTracker.GetRendRemaining(guid)
 		local age = now - pending.time
 		if age < 5 then
 			-- Estimate remaining: full duration minus age
-			local duration = ATW.GetRendDuration and ATW.GetRendDuration() or ATW.RendTracker.REND_DURATION
+			local duration = (ATW.RendDuration and ATW.RendDuration > 0) and ATW.RendDuration or ATW.RendTracker.REND_DURATION
 			return math.max(0, duration - age)
 		else
 			ATW.RendTracker.pending[guid] = nil

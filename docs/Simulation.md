@@ -61,6 +61,11 @@ state = {
     overpowerReady = true,      -- Overpower proc available?
     overpowerEnd = 3000,        -- Time until window expires (ms)
 
+    -- Racial Buffs (TurtleWoW)
+    hasBloodFury = false,       -- Blood Fury active? (+AP)
+    hasBerserking = false,      -- Berserking active? (+haste)
+    hasPerception = false,      -- Perception active? (+2% crit)
+
     -- Swing Queue
     swingQueued = nil,          -- nil, "hs", "cleave"
 
@@ -83,6 +88,7 @@ state = {
     enemyCountWW = 3,           -- 8yd (Whirlwind range)
 
     -- Cooldowns (ms remaining, 0 = ready)
+    -- IMPORTANT: These are READ FROM GAME API via ATW.GetCooldownRemaining()
     cooldowns = {
         Bloodthirst = 0,
         Whirlwind = 3000,
@@ -97,6 +103,10 @@ state = {
         Recklessness = 0,
         SweepingStrikes = 0,
         Pummel = 0,
+        -- Racial cooldowns
+        BloodFury = 0,      -- 2 min CD
+        Berserking = 0,     -- 3 min CD
+        Perception = 0,     -- 3 min CD
     },
 }
 ```
@@ -358,6 +368,60 @@ elseif action.name == "Slam" then
 ```
 
 This makes Slam a trade-off: good damage but delays your next auto-attack.
+
+### Racial Abilities (TurtleWoW)
+
+Three racial abilities affect DPS and are fully integrated into simulation:
+
+| Racial | Race | Effect | CD | GCD |
+|--------|------|--------|-----|-----|
+| Blood Fury | Orc | +AP (level×2) for 15s | 2min | Off |
+| Berserking | Troll | +10-15% haste for 10s | 3min | On |
+| Perception | Human | +2% crit for 20s | 3min | Off |
+
+**Buff Effects Integration:**
+
+```lua
+-- GetCritChance() includes Perception
+if state.buffs.Perception then
+    crit = crit + 2
+end
+
+-- GetEffectiveAP() includes Blood Fury
+if state.buffs.BloodFury then
+    ap = ap + (UnitLevel("player") * 2)  -- 120 at level 60
+end
+
+-- GetHasteMod() includes Berserking (stacks with Flurry)
+if state.buffs.Berserking then
+    haste = haste * 1.125  -- Average of 10-15%
+end
+```
+
+**Action Generation:**
+
+```lua
+-- Blood Fury (Orc): off-GCD, any stance
+if ATW.Racials.HasBloodFury then
+    if cooldowns.BloodFury <= 0 and not state.hasBloodFury then
+        table.insert(actions, {name = "BloodFury", offGCD = true})
+    end
+end
+
+-- Berserking (Troll): on-GCD, costs 5 rage
+if ATW.Racials.HasBerserking then
+    if cooldowns.Berserking <= 0 and not state.hasBerserking and rage >= 5 then
+        table.insert(actions, {name = "Berserking", rage = 5})
+    end
+end
+
+-- Perception (Human): off-GCD, any stance
+if ATW.Racials.HasPerception then
+    if cooldowns.Perception <= 0 and not state.hasPerception then
+        table.insert(actions, {name = "Perception", offGCD = true})
+    end
+end
+```
 
 ### Heroic Strike / Cleave - Pure Simulation
 

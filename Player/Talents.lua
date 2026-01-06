@@ -160,17 +160,22 @@ function ATW.HasSpell(spellName)
 end
 
 ---------------------------------------
--- Get Rend duration based on current max rank
+-- Get Rend duration based on cached value (set by LoadSpells)
 -- Returns: duration in seconds
+-- PREFER using ATW.RendDuration directly instead of calling this function
 ---------------------------------------
 function ATW.GetRendDuration()
+	-- Use cached value if available (set by LoadSpells)
+	if ATW.RendDuration and ATW.RendDuration > 0 then
+		return ATW.RendDuration
+	end
+	-- Fallback: calculate from rank (shouldn't be needed after LoadSpells)
 	local rank = ATW.Spells and ATW.Spells.RendRank or 0
 	if rank <= 0 then
-		-- Rend not known, return 0
 		return 0
 	end
 	local data = ATW.RendData[rank]
-	return data and data.duration or 21  -- Default to max if rank unknown
+	return data and data.duration or 22
 end
 
 ---------------------------------------
@@ -196,12 +201,18 @@ function ATW.GetRendDamage()
 end
 
 ---------------------------------------
--- Get number of Rend ticks based on duration
+-- Get number of Rend ticks based on cached duration
 -- Rend ticks every 3 seconds
+-- Uses ATW.RendTicks if available (set by LoadSpells)
 ---------------------------------------
 function ATW.GetRendTicks()
-	local duration = ATW.GetRendDuration()
-	return math.floor(duration / 3)  -- 9s=3, 12s=4, 15s=5, 18s=6, 21s=7
+	-- Use cached value if available
+	if ATW.RendTicks and ATW.RendTicks > 0 then
+		return ATW.RendTicks
+	end
+	-- Fallback to calculation (shouldn't be needed after LoadSpells)
+	local duration = (ATW.RendDuration and ATW.RendDuration > 0) and ATW.RendDuration or 22
+	return math.floor(duration / 3)
 end
 
 ---------------------------------------
@@ -342,9 +353,32 @@ function ATW.LoadSpells()
 	ATW.Spells.RecklessnessRank = ATW.GetMaxSpellRank("Recklessness")
 	ATW.Spells.SweepingStrikesRank = ATW.GetMaxSpellRank("Sweeping Strikes")
 
-	-- Update RendTracker duration with actual spell rank
-	if ATW.RendTracker and ATW.Spells.RendRank > 0 then
-		ATW.RendTracker.REND_DURATION = ATW.GetRendDuration()
+	---------------------------------------
+	-- CACHE REND VALUES (use these everywhere instead of calling functions)
+	-- This prevents fallback values from being used mid-combat
+	---------------------------------------
+	if ATW.Spells.RendRank > 0 then
+		local rendData = ATW.RendData[ATW.Spells.RendRank]
+		if rendData then
+			ATW.RendDuration = rendData.duration  -- Cached duration in seconds
+			ATW.RendTicks = math.floor(rendData.duration / 3)  -- Cached tick count
+			ATW.RendBaseDamage = rendData.damage  -- Cached base damage
+		else
+			-- Fallback for unknown rank (shouldn't happen)
+			ATW.RendDuration = 22
+			ATW.RendTicks = 7
+			ATW.RendBaseDamage = 147
+		end
+	else
+		-- No Rend learned - set defaults
+		ATW.RendDuration = 0
+		ATW.RendTicks = 0
+		ATW.RendBaseDamage = 0
+	end
+
+	-- Update RendTracker with cached value
+	if ATW.RendTracker then
+		ATW.RendTracker.REND_DURATION = ATW.RendDuration
 	end
 
 	-- Debug output

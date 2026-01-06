@@ -82,11 +82,35 @@ function ATW.LoadSpells()
     ATW.Spells.RecklessnessRank = ATW.GetMaxSpellRank("Recklessness")
     ATW.Spells.SweepingStrikesRank = ATW.GetMaxSpellRank("Sweeping Strikes")
 
-    -- Update RendTracker duration with actual spell rank
-    if ATW.RendTracker and ATW.Spells.RendRank > 0 then
-        ATW.RendTracker.REND_DURATION = ATW.GetRendDuration()
+    -- CACHE REND VALUES (use these instead of calling functions)
+    if ATW.Spells.RendRank > 0 then
+        local rendData = ATW.RendData[ATW.Spells.RendRank]
+        if rendData then
+            ATW.RendDuration = rendData.duration      -- Cached duration (seconds)
+            ATW.RendTicks = math.floor(rendData.duration / 3)
+            ATW.RendBaseDamage = rendData.damage      -- Before talent bonus
+        end
+    end
+
+    -- Update RendTracker with cached value
+    if ATW.RendTracker then
+        ATW.RendTracker.REND_DURATION = ATW.RendDuration
     end
 end
+```
+
+### Cached Rend Values
+
+To prevent fallback values from being used mid-combat, Rend values are cached:
+
+```lua
+-- Set by LoadSpells() - use these instead of calling functions
+ATW.RendDuration    -- Duration in seconds (e.g., 22)
+ATW.RendTicks       -- Number of ticks (e.g., 7)
+ATW.RendBaseDamage  -- Base damage before talents (e.g., 147)
+
+-- Usage:
+local duration = (ATW.RendDuration and ATW.RendDuration > 0) and ATW.RendDuration or 22
 ```
 
 ## Simulator Spell Verification
@@ -297,25 +321,27 @@ ATW.Talents.HasBT = r > 0
 
 ## TurtleWoW Differences
 
-TurtleWoW has modified some talents from vanilla:
+TurtleWoW has modified some spells and talents from vanilla:
 
-| Talent | Vanilla | TurtleWoW |
-|--------|---------|-----------|
+| Item | Vanilla | TurtleWoW |
+|------|---------|-----------|
+| Rend Duration | 9/12/15/18/21/21/21s | 10/13/16/19/22/22/22s |
 | Improved Rend | 3 pts, +15/25/35% dmg | 2 pts, +10/20% dmg |
 | Unbridled Wrath | +1 rage | +1 rage (1H), +2 rage (2H) |
 
-## Rend Data by Rank
+## Rend Data by Rank (TurtleWoW)
 
 ```lua
 ATW.RendData = {
     -- [rank] = { damage, duration, level }
-    [1] = { damage = 15,  duration = 9,  level = 4 },
-    [2] = { damage = 28,  duration = 12, level = 10 },
-    [3] = { damage = 45,  duration = 15, level = 20 },
-    [4] = { damage = 66,  duration = 18, level = 30 },
-    [5] = { damage = 98,  duration = 21, level = 40 },
-    [6] = { damage = 126, duration = 21, level = 50 },
-    [7] = { damage = 147, duration = 21, level = 60 },
+    -- TurtleWoW uses 10/13/16/19/22/22/22 (not vanilla 9/12/15/18/21/21/21)
+    [1] = { damage = 15,  duration = 10, level = 4 },
+    [2] = { damage = 28,  duration = 13, level = 10 },
+    [3] = { damage = 45,  duration = 16, level = 20 },
+    [4] = { damage = 66,  duration = 19, level = 30 },
+    [5] = { damage = 98,  duration = 22, level = 40 },
+    [6] = { damage = 126, duration = 22, level = 50 },
+    [7] = { damage = 147, duration = 22, level = 60 },
 }
 ```
 
@@ -323,12 +349,19 @@ ATW.RendData = {
 
 ### Rend Duration
 
+**Prefer using cached `ATW.RendDuration` instead of calling this function.**
+
 ```lua
 function ATW.GetRendDuration()
+    -- First check cached value (set by LoadSpells)
+    if ATW.RendDuration and ATW.RendDuration > 0 then
+        return ATW.RendDuration
+    end
+    -- Fallback to calculation
     local rank = ATW.Spells and ATW.Spells.RendRank or 0
     if rank <= 0 then return 0 end
     local data = ATW.RendData[rank]
-    return data and data.duration or 21
+    return data and data.duration or 22  -- TurtleWoW max rank = 22s
 end
 ```
 
@@ -360,17 +393,61 @@ end
 ```lua
 -- Commands/Events.lua, VARIABLES_LOADED event
 ATW.LoadTalents()
-ATW.LoadSpells()
+ATW.LoadSpells()   -- Detect spell ranks + cache Rend values
+ATW.LoadRacials()  -- Detect racial abilities (Blood Fury, Berserking, etc.)
 ```
 
-### On Level Up / New Spells
+### On Level Up / New Spells / Talent Changes
 
 ```lua
 -- Commands/Events.lua
-elseif event == "PLAYER_LEVEL_UP" or event == "SPELLS_CHANGED" then
+elseif event == "PLAYER_LEVEL_UP" or event == "SPELLS_CHANGED" or event == "CHARACTER_POINTS_CHANGED" then
     ATW.LoadTalents()
-    ATW.LoadSpells()  -- Re-detect spell ranks
+    ATW.LoadSpells()   -- Re-detect spell ranks + re-cache Rend values
+    ATW.LoadRacials()  -- Re-detect racials (Blood Fury AP scales with level)
+    ATW.DetectStances()
 ```
+
+### Events Registered
+
+| Event | Purpose |
+|-------|---------|
+| VARIABLES_LOADED | Initial load on login |
+| PLAYER_LEVEL_UP | New spell ranks available |
+| SPELLS_CHANGED | New spells learned |
+| CHARACTER_POINTS_CHANGED | Talent points spent/refunded |
+
+## Racial Abilities
+
+### LoadRacials() Function
+
+Detects and loads race-specific abilities:
+
+```lua
+-- Player/Talents.lua
+function ATW.LoadRacials()
+    ATW.Racials = ATW.Racials or {}
+    local _, race = UnitRace("player")
+
+    if race == "Orc" then
+        ATW.Racials.HasBloodFury = ATW.GetMaxSpellRank("Blood Fury") > 0
+    elseif race == "Troll" then
+        ATW.Racials.HasBerserking = ATW.GetMaxSpellRank("Berserking") > 0
+    elseif race == "Human" then
+        ATW.Racials.HasPerception = ATW.GetMaxSpellRank("Perception") > 0
+    end
+end
+```
+
+### Supported Racials
+
+| Race | Ability | Effect | Duration | CD |
+|------|---------|--------|----------|-----|
+| Orc | Blood Fury | +AP (level * 2) | 15s | 2m |
+| Troll | Berserking | 10-15% haste | 10s | 3m |
+| Human | Perception | +2% crit | 20s | 3m |
+
+Racials are treated as self-buffs (no target required) and their cooldowns are tracked by the simulation.
 
 ## Debug Command
 
