@@ -127,16 +127,14 @@ function ATW.TryNextOverpower()
 	local castingOnDifferentTarget = (currentTargetGUID and guid ~= currentTargetGUID)
 
 	-- SuperWoW GUID targeting: CastSpellByName(spell, unit) works with GUIDs
-	-- The 2nd parameter accepts GUIDs in place of unit tokens ("target", "player")
 	local ok = pcall(function()
 		CastSpellByName("Overpower", guid)
 	end)
 
-	-- CRITICAL: After casting on nameplate, force auto-attack back to real target
-	-- SuperWoW changes attack target when using CastSpellByName with GUID
-	-- Must pass explicit GUID to avoid inheriting the nameplate as attack target
+	-- Flag that we need to restore AA to main target (will be handled next frame)
+	-- This avoids calling AttackTarget() in the same frame as the cast
 	if ok and castingOnDifferentTarget and currentTargetGUID then
-		AttackTarget(currentTargetGUID)  -- Resume attacking the player's actual target
+		ATW.State.NeedsAARestore = currentTargetGUID
 	end
 
 	return true

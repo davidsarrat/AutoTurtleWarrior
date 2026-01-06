@@ -112,16 +112,14 @@ function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 
 	-- Casting on a different target than current (nameplate in execute range)
 	-- SuperWoW GUID targeting: CastSpellByName(spell, unit) works with GUIDs
-	-- The 2nd parameter accepts GUIDs in place of unit tokens ("target", "player")
 	local ok, err = pcall(function()
 		CastSpellByName("Execute", guid)
 	end)
 
-	-- CRITICAL: After casting on nameplate, force auto-attack back to real target
-	-- SuperWoW changes attack target when using CastSpellByName with GUID
-	-- Must pass explicit GUID to avoid inheriting the nameplate as attack target
+	-- Flag that we need to restore AA to main target (will be handled next frame)
+	-- This avoids calling AttackTarget() in the same frame as the cast
 	if ok and targetGuid then
-		AttackTarget(targetGuid)  -- Resume attacking the player's actual target
+		ATW.State.NeedsAARestore = targetGuid
 	end
 
 	return ok
@@ -280,16 +278,14 @@ function ATW.GUIDTargeting.CastRendOnGUID(guid)
 	local castingOnDifferentTarget = (currentTargetGUID and guid ~= currentTargetGUID)
 
 	-- SuperWoW GUID targeting: CastSpellByName(spell, unit) works with GUIDs
-	-- The 2nd parameter accepts GUIDs in place of unit tokens ("target", "player")
 	local castOk, err = pcall(function()
 		CastSpellByName("Rend", guid)
 	end)
 
-	-- CRITICAL: After casting on nameplate, force auto-attack back to real target
-	-- SuperWoW changes attack target when using CastSpellByName with GUID
-	-- Must pass explicit GUID to avoid inheriting the nameplate as attack target
+	-- Flag that we need to restore AA to main target (will be handled next frame)
+	-- This avoids calling AttackTarget() in the same frame as the cast
 	if castOk and castingOnDifferentTarget and currentTargetGUID then
-		AttackTarget(currentTargetGUID)  -- Resume attacking the player's actual target
+		ATW.State.NeedsAARestore = currentTargetGUID
 	end
 
 	return castOk

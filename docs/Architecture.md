@@ -162,17 +162,59 @@ ATW.State = {
     LastStance = 0,         -- Time of last stance change
 
     -- Combat Windows
-    Overpower = nil,        -- Overpower window active
-    Interrupt = nil,        -- Enemy casting (pummel)
+    Overpower = nil,        -- Overpower window active (timestamp)
+    Interrupt = nil,        -- Enemy casting (pummel window)
 
     -- Attack State
     Attacking = nil,        -- Currently auto-attacking
+    NeedsAARestore = nil,   -- GUID to restore AA to after nameplate cast
 
     -- Rend Tracking (pending verification)
     PendingRendGUID = nil,  -- GUID of target we cast Rend on
     PendingRendTime = nil,  -- When we cast it
     PendingRendName = nil,  -- Target name for verification
 }
+```
+
+### AA Target Restore System
+
+When casting spells on nameplates via GUID (Rend spread, Execute on low HP mob, Overpower on mob that dodged), SuperWoW changes the auto-attack target to that nameplate. To prevent this:
+
+1. After a GUID cast to a different target, we set `State.NeedsAARestore = mainTargetGUID`
+2. On the next rotation frame, we detect this flag and call `AttackTarget()` once
+3. This restores AA to the main target without interfering with the spell cast
+
+This is done on the **next frame** rather than immediately after the cast to avoid potential conflicts with the game's internal state updates.
+
+### Overpower Multi-Target Iteration
+
+When a mob dodges, the combat log only says "X dodges" but doesn't tell us WHICH mob dodged if there are multiple in melee range. The addon uses an **iteration system** to try Overpower on each potential target:
+
+```lua
+ATW.OverpowerIteration = {
+    targets = {},       -- Array of GUIDs to try
+    index = 0,          -- Current position in array
+    lastBuild = 0,      -- Timestamp of last list build
+}
+```
+
+**Flow:**
+1. Dodge detected → `State.Overpower = GetTime()` (5 second window)
+2. Target list built: main target first, then all nameplates in 5yd
+3. Each keypress advances `index` and tries `CastSpellByName("Overpower", guid)`
+4. If Overpower fails (wrong mob), next keypress tries next GUID
+5. When Overpower lands → `OnOverpowerSuccess()` clears everything
+6. If all targets exhausted → proc cleared, rotación normal
+
+**Interaction with AA Restore:**
+- These systems are **independent**: iteration tracks GUIDs, AA restore tracks attack target
+- While iterating, AA is restored to main target between attempts
+- This is desirable: we auto-attack the main target while searching for the dodging mob
+
+```
+Keypress 1: Try OP on mob A → fails → set NeedsAARestore
+Keypress 2: Restore AA → Try OP on mob B → fails → set NeedsAARestore
+Keypress 3: Restore AA → Try OP on mob C → SUCCESS → clear all state
 ```
 
 ### Simulation State (captured fresh each decision)

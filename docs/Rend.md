@@ -43,7 +43,9 @@ We DON'T immediately record Rend when cast because:
 - The target might be immune
 - We need combat log confirmation
 
-Instead, we use a **"pending" system**:
+**Primary Method (SuperWoW)**: The addon uses `UNIT_CASTEVENT` from SuperWoW which provides real-time cast confirmation with the exact GUID. This is the most reliable method.
+
+**Fallback Method**: For non-SuperWoW or as backup, we use a **"pending" system**:
 
 ```lua
 -- In Rotation.lua, when casting Rend:

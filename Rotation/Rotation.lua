@@ -32,6 +32,23 @@ function ATW.Rotation()
 
 	-- From here on, we have a valid target
 
+	---------------------------------------
+	-- AA Target Restore (after GUID cast to nameplate)
+	-- If we cast on a nameplate last frame, restore AA to main target
+	-- This is done here (next frame) to avoid conflicts with same-frame cast
+	---------------------------------------
+	if state.NeedsAARestore then
+		local restoreGUID = state.NeedsAARestore
+		state.NeedsAARestore = nil  -- Clear flag first to prevent loops
+
+		-- Only restore if we're still targeting the same unit
+		local _, currentTargetGUID = UnitExists("target")
+		if currentTargetGUID and currentTargetGUID == restoreGUID then
+			AttackTarget()  -- Force AA back to current target
+			ATW.Debug("AA restored to main target")
+		end
+	end
+
 	-- Combat state
 	local st = ATW.Stance()
 
