@@ -2014,15 +2014,33 @@ function Engine.CaptureCurrentState()
 	---------------------------------------
 	-- MULTI-TARGET TRACKING
 	-- Capture all enemies via nameplates
+	-- OPTIMIZATION: Skip when AoEEnabled = false (single target mode)
 	---------------------------------------
 	state.enemies = {}
 	state.enemyCount = 0
 	state.enemyCountMelee = 0
 	state.enemyCountWW = 0
 
+	-- Check config toggles (with defaults)
+	local aoeEnabled = AutoTurtleWarrior_Config.AoEEnabled
+	if aoeEnabled == nil then aoeEnabled = true end
+	local rendSpreadEnabled = AutoTurtleWarrior_Config.RendSpread
+	if rendSpreadEnabled == nil then rendSpreadEnabled = true end
+
+	-- AoE OFF implies Rend Spread OFF (single target funnel mode)
+	if not aoeEnabled then
+		rendSpreadEnabled = false
+	end
+
+	-- Store in state for GetValidActions to use
+	state.aoeEnabled = aoeEnabled
+	state.rendSpreadEnabled = rendSpreadEnabled
+
 	local targetFoundInList = false
 
-	if ATW.GetEnemiesWithTTD then
+	-- Only build full enemy list if AoE OR RendSpread is enabled
+	-- Otherwise we only need the main target
+	if (aoeEnabled or rendSpreadEnabled) and ATW.GetEnemiesWithTTD then
 		local allEnemies = ATW.GetEnemiesWithTTD(8)
 
 		for _, enemy in ipairs(allEnemies) do
@@ -2084,6 +2102,13 @@ function Engine.CaptureCurrentState()
 		state.enemyCount = state.enemyCount + 1
 		state.enemyCountMelee = state.enemyCountMelee + 1
 		state.enemyCountWW = state.enemyCountWW + 1
+	end
+
+	-- SINGLE TARGET MODE: Force enemy counts to 1 for AoE ability decisions
+	-- This makes WW/Cleave behave as single-target (lower priority)
+	if not aoeEnabled then
+		state.enemyCountMelee = math.min(state.enemyCountMelee, 1)
+		state.enemyCountWW = math.min(state.enemyCountWW, 1)
 	end
 
 	return state
@@ -2309,23 +2334,34 @@ function Engine.GetValidActions(state)
 	-- MULTI-TARGET REND (stance: Battle/Defensive, 10 rage)
 	-- Generate Rend action for EACH enemy that needs it
 	-- SKIP if GCD is active (Rend is a GCD ability)
+	-- SKIP multi-target if RendSpread is disabled (single target only)
+	--
+	-- CONSERVATIVE THRESHOLDS:
+	-- Rend costs 10 rage + potential stance dance (10-25 rage loss from TM)
+	-- For Rend to be worth it, we need enough ticks to outvalue the cost:
+	-- - Without dance: ~4 ticks minimum (12s) to beat HS/Cleave value
+	-- - With dance: ~5 ticks minimum (15s) due to rage loss
+	-- These thresholds prevent Rend on mobs that will die too soon
 	---------------------------------------
 	local rendCost = 10
 	local rendActionsAdded = {}  -- Track which targets we added Rend for
 
-	if not gcdActive and hasSpell("Rend") and state.enemies and table.getn(state.enemies) > 0 then
+	-- Minimum TTD thresholds (in ms)
+	local MIN_TTD_NO_DANCE = 12000   -- 12s = 4 ticks without stance dance
+	local MIN_TTD_WITH_DANCE = 15000 -- 15s = 5 ticks if we need to stance dance
+
+	-- Only iterate enemies if RendSpread is enabled (otherwise fall through to single-target)
+	if not gcdActive and hasSpell("Rend") and state.rendSpreadEnabled and state.enemies and table.getn(state.enemies) > 0 then
 		for _, enemy in ipairs(state.enemies) do
 			-- Skip bleed immune targets
 			if not enemy.bleedImmune and not enemy.inExecute then
 				-- Only if Rend not active or will expire before next GCD completes
 				-- Threshold = GCD duration, so we refresh if we won't have time after this action
 				if not enemy.hasRend or enemy.rendRemaining < Engine.GCD then
-					-- NO HARDCODED THRESHOLDS - Let simulation decide if Rend is worth it
-					-- The GetActionDamage() function calculates actual damage based on TTD
-					-- and the simulation compares vs other abilities
-					-- Only filter: target must survive at least 1 tick (3s) to do any damage
-					local minTTDForAnyDamage = 3000  -- 1 tick minimum
-					if enemy.ttd >= minTTDForAnyDamage then
+					-- Use appropriate minimum based on whether we need to dance
+					local needsDance = not (stance == 1 or stance == 2)
+					local minTTD = needsDance and MIN_TTD_WITH_DANCE or MIN_TTD_NO_DANCE
+					if enemy.ttd >= minTTD then
 						-- Check melee range (5yd for Rend)
 						if enemy.distance <= 5 then
 							-- Add Rend action for this specific target
@@ -2365,11 +2401,17 @@ function Engine.GetValidActions(state)
 		if not state.targetBleedImmune and not inExecute then
 			if not state.rendOnTarget or state.rendRemaining < Engine.GCD then
 				-- Refresh if < 1 GCD remaining (won't have time after next action)
-				local minTTDForAnyDamage = 3000
-				if state.targetTTD >= minTTDForAnyDamage then
-					if (stance == 1 or stance == 2) and rage >= rendCost then
+				-- CONSERVATIVE: Require enough TTD for meaningful tick value
+				-- Same thresholds as multi-target spreading
+				local MIN_TTD_NO_DANCE = 12000   -- 12s = 4 ticks without stance dance
+				local MIN_TTD_WITH_DANCE = 15000 -- 15s = 5 ticks if we need to stance dance
+
+				if (stance == 1 or stance == 2) and rage >= rendCost then
+					if state.targetTTD >= MIN_TTD_NO_DANCE then
 						table.insert(actions, {name = "Rend", stance = stance, rage = rendCost, needsDance = false})
-					elseif stance == 3 and canUse(1, rendCost) then
+					end
+				elseif stance == 3 and canUse(1, rendCost) then
+					if state.targetTTD >= MIN_TTD_WITH_DANCE then
 						table.insert(actions, {name = "Rend", stance = 1, rage = rendCost, needsDance = true})
 					end
 				end

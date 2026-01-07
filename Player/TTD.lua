@@ -280,7 +280,36 @@ function ATW.GetUnitTTD(guid)
 	end
 
 	if ttd > 300 then
-		return 300  -- Cap at 5 minutes
+		ttd = 300  -- Cap at 5 minutes
+	end
+
+	---------------------------------------
+	-- CONSERVATIVE ADJUSTMENTS
+	-- Linear regression tends to overestimate TTD because:
+	-- 1. Execute phase (< 20% HP) = much faster death
+	-- 2. Burst damage phases aren't modeled
+	-- 3. Other players' damage is unpredictable
+	---------------------------------------
+	local currentHPPercent = (lastSample.hp / maxHP) * 100
+
+	-- Execute range modifier: targets die MUCH faster below 20%
+	-- Warriors spam Execute, other classes have execute abilities too
+	if currentHPPercent < 20 then
+		ttd = ttd * 0.4  -- 60% faster death in execute range
+	elseif currentHPPercent < 35 then
+		ttd = ttd * 0.65  -- 35% faster approaching execute
+	elseif currentHPPercent < 50 then
+		ttd = ttd * 0.8  -- 20% faster at half HP (fight is established)
+	end
+
+	-- HP-based hard caps (fallback for regression errors)
+	-- These are conservative estimates based on typical kill speeds
+	if currentHPPercent < 10 then
+		ttd = math.min(ttd, 5)   -- < 10% HP = max 5s
+	elseif currentHPPercent < 20 then
+		ttd = math.min(ttd, 10)  -- < 20% HP = max 10s
+	elseif currentHPPercent < 30 then
+		ttd = math.min(ttd, 18)  -- < 30% HP = max 18s
 	end
 
 	return ttd

@@ -28,6 +28,10 @@ ATW.DEFAULT = {
 	RecklessEnabled = false,
 	-- Auto-interrupt with Pummel
 	PummelEnabled = true,
+	-- AoE rotation toggle (true = auto based on enemy count, false = force single target)
+	AoEEnabled = true,
+	-- Rend spreading toggle (true = spread to multiple targets, false = main target only)
+	RendSpread = true,
 }
 
 ---------------------------------------

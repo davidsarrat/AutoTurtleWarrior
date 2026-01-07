@@ -347,6 +347,58 @@ function ATW.HandleCommand(msg)
 			ATW.Print("Usage: /atw pummel [on|off]")
 		end
 
+	elseif cmd == "aoemode" or cmd == "aoetoggle" then
+		-- Toggle AoE mode (auto vs single target)
+		if AutoTurtleWarrior_Config.AoEEnabled == nil then
+			AutoTurtleWarrior_Config.AoEEnabled = ATW.DEFAULT.AoEEnabled
+		end
+		AutoTurtleWarrior_Config.AoEEnabled = not AutoTurtleWarrior_Config.AoEEnabled
+		if AutoTurtleWarrior_Config.AoEEnabled then
+			ATW.Print("AoE Mode: |cff00ff00AUTO|r (WW/Cleave based on enemy count)")
+		else
+			ATW.Print("AoE Mode: |cffff9900SINGLE TARGET|r (funnel mode)")
+		end
+
+	elseif strfind(cmd, "^aoemode%s+") or strfind(cmd, "^aoetoggle%s+") then
+		-- /atw aoemode on|off
+		local _, _, arg = strfind(cmd, "^%S+%s+(.+)")
+		arg = strlower(arg or "")
+		if arg == "on" or arg == "auto" then
+			AutoTurtleWarrior_Config.AoEEnabled = true
+			ATW.Print("AoE Mode: |cff00ff00AUTO|r (WW/Cleave based on enemy count)")
+		elseif arg == "off" or arg == "st" or arg == "single" then
+			AutoTurtleWarrior_Config.AoEEnabled = false
+			ATW.Print("AoE Mode: |cffff9900SINGLE TARGET|r (funnel mode)")
+		else
+			ATW.Print("Usage: /atw aoemode [on|off|auto|st]")
+		end
+
+	elseif cmd == "rendspread" or cmd == "spread" then
+		-- Toggle Rend spreading
+		if AutoTurtleWarrior_Config.RendSpread == nil then
+			AutoTurtleWarrior_Config.RendSpread = ATW.DEFAULT.RendSpread
+		end
+		AutoTurtleWarrior_Config.RendSpread = not AutoTurtleWarrior_Config.RendSpread
+		if AutoTurtleWarrior_Config.RendSpread then
+			ATW.Print("Rend Spread: |cff00ff00ON|r (spread to multiple targets)")
+		else
+			ATW.Print("Rend Spread: |cffff9900OFF|r (main target only)")
+		end
+
+	elseif strfind(cmd, "^rendspread%s+") or strfind(cmd, "^spread%s+") then
+		-- /atw rendspread on|off
+		local _, _, arg = strfind(cmd, "^%S+%s+(.+)")
+		arg = strlower(arg or "")
+		if arg == "on" then
+			AutoTurtleWarrior_Config.RendSpread = true
+			ATW.Print("Rend Spread: |cff00ff00ON|r (spread to multiple targets)")
+		elseif arg == "off" then
+			AutoTurtleWarrior_Config.RendSpread = false
+			ATW.Print("Rend Spread: |cffff9900OFF|r (main target only)")
+		else
+			ATW.Print("Usage: /atw rendspread [on|off]")
+		end
+
 	elseif cmd == "casts" or cmd == "casting" then
 		-- Show casting enemies (debug)
 		ATW.PrintCastingEnemies()
@@ -700,11 +752,14 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw toggle - Show/hide display")
 		ATW.Print("  /atw lock - Lock/unlock for moving")
 		ATW.Print("  /atw scale 1.5 - Set display scale")
+		ATW.Print("--- Toggles ---")
 		ATW.Print("  /atw cd - Show cooldown status")
 		ATW.Print("  /atw burst [on|off] - Toggle DW + Racials")
 		ATW.Print("  /atw reck [on|off] - Toggle Recklessness")
 		ATW.Print("  /atw sustain - Disable all CDs")
 		ATW.Print("  /atw pummel [on|off] - Auto-interrupt")
+		ATW.Print("  /atw aoemode [on|off] - AoE/single target")
+		ATW.Print("  /atw rendspread [on|off] - Rend spreading")
 		ATW.Print("--- Simulation & Strategy ---")
 		ATW.Print("  /atw plan - Strategic cooldown plan")
 		ATW.Print("  /atw decision - Debug tactical decisions")
