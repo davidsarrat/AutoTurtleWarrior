@@ -3116,6 +3116,30 @@ function Engine.GetBestAction()
 	local state = Engine.CaptureCurrentState()
 
 	---------------------------------------
+	-- INTERRUPT LAYER: Absolute priority for interrupts
+	-- Pummel MUST happen immediately when enemy is casting
+	-- No caching, no simulation - just do it
+	---------------------------------------
+	if state.shouldInterrupt then
+		local actions = Engine.GetValidActions(state)
+		for _, action in ipairs(actions) do
+			if action.isInterrupt then
+				-- Return immediately with max priority
+				local results = {{
+					name = action.name,
+					damage = 999999,
+					needsDance = action.needsDance,
+					targetGUID = action.targetGUID,
+					interrupt = true,
+				}}
+				Engine.lastDecisionResults = results
+				Engine.lastBestAction = action
+				return action, 999999, results
+			end
+		end
+	end
+
+	---------------------------------------
 	-- CACHING: Return cached result if state hasn't changed significantly
 	---------------------------------------
 	if Engine.CacheValid(state) then
