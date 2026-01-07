@@ -292,8 +292,64 @@ function ATW.HandleCommand(msg)
 		end
 
 	elseif cmd == "cd" or cmd == "cooldowns" then
-		-- Toggle cooldowns mode
-		ATW.ToggleCooldowns()
+		-- Show current CD status
+		ATW.PrintCooldownStatus()
+
+	elseif cmd == "sustain" then
+		-- Set sustain mode (all CDs off)
+		ATW.SetSustain()
+
+	elseif cmd == "burst" then
+		-- Toggle burst
+		ATW.ToggleBurst()
+
+	elseif strfind(cmd, "^burst%s+") then
+		-- /atw burst on|off
+		local _, _, arg = strfind(cmd, "^burst%s+(.+)")
+		arg = strlower(arg or "")
+		if arg == "on" then
+			ATW.SetBurst(true)
+		elseif arg == "off" then
+			ATW.SetBurst(false)
+		else
+			ATW.Print("Usage: /atw burst [on|off]")
+		end
+
+	elseif cmd == "reckless" or cmd == "reck" then
+		-- Toggle reckless
+		ATW.ToggleReckless()
+
+	elseif strfind(cmd, "^reckless%s+") or strfind(cmd, "^reck%s+") then
+		-- /atw reckless on|off
+		local _, _, arg = strfind(cmd, "^%S+%s+(.+)")
+		arg = strlower(arg or "")
+		if arg == "on" then
+			ATW.SetReckless(true)
+		elseif arg == "off" then
+			ATW.SetReckless(false)
+		else
+			ATW.Print("Usage: /atw reckless [on|off]")
+		end
+
+	elseif cmd == "pummel" or cmd == "int" or cmd == "interrupt" then
+		-- Toggle auto-interrupt
+		ATW.TogglePummel()
+
+	elseif strfind(cmd, "^pummel%s+") or strfind(cmd, "^int%s+") then
+		-- /atw pummel on|off
+		local _, _, arg = strfind(cmd, "^%S+%s+(.+)")
+		arg = strlower(arg or "")
+		if arg == "on" then
+			ATW.SetPummel(true)
+		elseif arg == "off" then
+			ATW.SetPummel(false)
+		else
+			ATW.Print("Usage: /atw pummel [on|off]")
+		end
+
+	elseif cmd == "casts" or cmd == "casting" then
+		-- Show casting enemies (debug)
+		ATW.PrintCastingEnemies()
 
 	elseif cmd == "stance" then
 		-- Show stance info
@@ -515,6 +571,128 @@ function ATW.HandleCommand(msg)
 			end
 		end
 
+	elseif cmd == "strategic" or cmd == "plan" then
+		-- Show strategic cooldown plan
+		if ATW.Strategic and ATW.Strategic.PrintPlan then
+			ATW.Strategic.PrintPlan()
+		else
+			ATW.Print("Strategic planner not loaded")
+		end
+
+	elseif strfind(cmd, "^spellid%s+") or strfind(cmd, "^spell%s+") then
+		-- Debug: show spell ID and cooldown info for a spell
+		local _, _, spellName = strfind(cmd, "^spell[id]*%s+(.+)")
+		if spellName then
+			ATW.Print("=== Spell Debug: " .. spellName .. " ===")
+
+			-- Find all spells with this name in spellbook
+			local foundCount = 0
+			local id = 1
+			for t = 1, GetNumSpellTabs() do
+				local tabName, _, _, n = GetSpellTabInfo(t)
+				for s = 1, n do
+					local name, rank = GetSpellName(id, BOOKTYPE_SPELL)
+					if name == spellName then
+						foundCount = foundCount + 1
+						local start, dur, enabled = GetSpellCooldown(id, 0)
+						local cdRemaining = 0
+						if start and start > 0 and dur and dur > 0 then
+							cdRemaining = (start + dur) - GetTime()
+						end
+						ATW.Print("  [" .. foundCount .. "] Tab: " .. tabName .. ", ID: " .. id)
+						ATW.Print("      Rank: " .. (rank or "none"))
+						ATW.Print("      CD: start=" .. (start or "nil") .. ", dur=" .. (dur or "nil"))
+						ATW.Print("      Remaining: " .. string.format("%.1f", cdRemaining) .. "s")
+					end
+					id = id + 1
+				end
+			end
+
+			if foundCount == 0 then
+				ATW.Print("|cffff0000Spell not found in spellbook|r")
+			end
+
+			-- Show what our functions return
+			local ourID = ATW.SpellID and ATW.SpellID(spellName)
+			local ourReady = ATW.Ready and ATW.Ready(spellName)
+			local ourCD = ATW.GetCooldownRemaining and ATW.GetCooldownRemaining(spellName)
+			ATW.Print("  ATW.SpellID: " .. (ourID or "nil"))
+			ATW.Print("  ATW.Ready: " .. tostring(ourReady))
+			ATW.Print("  ATW.GetCooldownRemaining: " .. (ourCD or "nil") .. "ms")
+		end
+
+	elseif cmd == "cache" then
+		-- Show cache statistics
+		if ATW.Engine and ATW.Engine.Cache then
+			local cache = ATW.Engine.Cache
+			ATW.Print("=== Engine Cache Stats ===")
+			ATW.Print("Cache hits: |cff00ff00" .. (cache.hits or 0) .. "|r")
+			ATW.Print("Cache misses: |cffff8800" .. (cache.misses or 0) .. "|r")
+			local total = (cache.hits or 0) + (cache.misses or 0)
+			if total > 0 then
+				local hitRate = (cache.hits or 0) / total * 100
+				ATW.Print("Hit rate: |cff00ffff" .. string.format("%.1f%%", hitRate) .. "|r")
+			end
+			ATW.Print("Min interval: " .. (cache.MIN_UPDATE_INTERVAL or 0) .. "ms")
+			if cache.lastUpdateTime and cache.lastUpdateTime > 0 then
+				local age = (GetTime() * 1000) - cache.lastUpdateTime
+				ATW.Print("Last update: " .. string.format("%.0f", age) .. "ms ago")
+			end
+		else
+			ATW.Print("Engine cache not available")
+		end
+
+	elseif cmd == "resetcache" then
+		-- Reset cache statistics
+		if ATW.Engine and ATW.Engine.Cache then
+			ATW.Engine.Cache.hits = 0
+			ATW.Engine.Cache.misses = 0
+			ATW.Engine.Cache.lastState = nil
+			ATW.Engine.Cache.lastResult = nil
+			ATW.Print("Cache reset")
+		end
+
+	elseif cmd == "has" or cmd == "abilities" then
+		-- Show cached available abilities
+		if not ATW.Has then
+			ATW.Print("|cffff0000Abilities not cached (use /reload)|r")
+		else
+			ATW.Print("=== Available Abilities (Cached) ===")
+
+			-- Talents
+			local talents = {}
+			if ATW.Has.Bloodthirst then table.insert(talents, "BT") end
+			if ATW.Has.MortalStrike then table.insert(talents, "MS") end
+			if ATW.Has.DeathWish then table.insert(talents, "DW") end
+			if ATW.Has.SweepingStrikes then table.insert(talents, "SS") end
+			ATW.Print("Talents: " .. (table.getn(talents) > 0 and table.concat(talents, ", ") or "|cff888888none|r"))
+
+			-- Core abilities
+			local core = {}
+			if ATW.Has.Execute then table.insert(core, "Exec") end
+			if ATW.Has.Whirlwind then table.insert(core, "WW") end
+			if ATW.Has.Overpower then table.insert(core, "OP") end
+			if ATW.Has.Rend then table.insert(core, "Rend") end
+			if ATW.Has.Slam then table.insert(core, "Slam") end
+			ATW.Print("Core: " .. table.concat(core, ", "))
+
+			-- Utility
+			local util = {}
+			if ATW.Has.Charge then table.insert(util, "Charge") end
+			if ATW.Has.Bloodrage then table.insert(util, "BR") end
+			if ATW.Has.BerserkerRage then table.insert(util, "BsR") end
+			if ATW.Has.Recklessness then table.insert(util, "Reck") end
+			if ATW.Has.Pummel then table.insert(util, "Pummel") end
+			ATW.Print("Utility: " .. (table.getn(util) > 0 and table.concat(util, ", ") or "|cff888888none|r"))
+
+			-- Racials
+			local racials = {}
+			if ATW.Has.BloodFury then table.insert(racials, "|cffff0000Blood Fury|r") end
+			if ATW.Has.Berserking then table.insert(racials, "|cff00ff00Berserking|r") end
+			if ATW.Has.Perception then table.insert(racials, "|cff0088ffPerception|r") end
+			ATW.Print("Racials: " .. (table.getn(racials) > 0 and table.concat(racials, ", ") or "|cff888888none|r"))
+		end
+
 	else
 		-- Help
 		ATW.Print("Commands:")
@@ -522,22 +700,23 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw toggle - Show/hide display")
 		ATW.Print("  /atw lock - Lock/unlock for moving")
 		ATW.Print("  /atw scale 1.5 - Set display scale")
-		ATW.Print("  /atw cd - Toggle cooldowns")
-		ATW.Print("  /atw prio - Show DPR priority list")
+		ATW.Print("  /atw cd - Show cooldown status")
+		ATW.Print("  /atw burst [on|off] - Toggle DW + Racials")
+		ATW.Print("  /atw reck [on|off] - Toggle Recklessness")
+		ATW.Print("  /atw sustain - Disable all CDs")
+		ATW.Print("  /atw pummel [on|off] - Auto-interrupt")
+		ATW.Print("--- Simulation & Strategy ---")
+		ATW.Print("  /atw plan - Strategic cooldown plan")
+		ATW.Print("  /atw decision - Debug tactical decisions")
+		ATW.Print("  /atw cache - Show cache statistics")
 		ATW.Print("  /atw sim - Simulate next 5 abilities")
-		ATW.Print("  /atw engine - Full combat simulation (20s)")
-		ATW.Print("  /atw decision - Debug decision simulator")
-		ATW.Print("  /atw strat - Compare strategies")
-		ATW.Print("  /atw rage - Show rage economy model")
-		ATW.Print("  /atw rend - Show Rend decision (HP-based)")
-		ATW.Print("  /atw rendtest - Debug Rend detection")
-		ATW.Print("  /atw aoe - Show AoE analysis")
-		ATW.Print("  /atw mob - Show creature type detection")
-		ATW.Print("  /atw gear - Show set bonuses/trinkets")
-		ATW.Print("  /atw spells - Show spell ranks")
-		ATW.Print("  /atw racial - Show racial abilities")
-		ATW.Print("  /atw op - Debug Overpower status")
-		ATW.Print("  /atw stance | stats | ttd | swing | hp")
+		ATW.Print("  /atw engine - Full combat simulation")
+		ATW.Print("--- Debug ---")
+		ATW.Print("  /atw aoe - AoE/Rend strategy analysis")
+		ATW.Print("  /atw rend - Rend decision debug")
+		ATW.Print("  /atw racial - Racial abilities")
+		ATW.Print("  /atw spells | talents | gear | mob")
+		ATW.Print("  /atw stance | stats | ttd | swing | op")
 	end
 end
 

@@ -20,7 +20,14 @@ ATW.DEFAULT = {
 	AoE = "auto",
 	AoECount = 3,
 	WWRange = 8,
-	UseCooldowns = true,
+	-- Cooldown toggles (priority system)
+	-- burst = Death Wish + Racials (Blood Fury, Berserking, Perception)
+	-- reckless = Recklessness
+	-- Both OFF = sustain mode
+	BurstEnabled = true,
+	RecklessEnabled = false,
+	-- Auto-interrupt with Pummel
+	PummelEnabled = true,
 }
 
 ---------------------------------------

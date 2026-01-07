@@ -1658,15 +1658,108 @@ end
 
 ---------------------------------------
 -- DECISION SIMULATOR
--- True simulation-based decision making
--- Instead of hardcoded priorities, we simulate
--- each possible action and pick the one that
--- maximizes damage over a short horizon
+-- Two-layer architecture:
+-- 1. Strategic Layer (ATW.Strategic) - Long-term cooldown planning
+-- 2. Tactical Layer (here) - Short-term ability decisions
 ---------------------------------------
 
 -- Configuration
-Engine.DECISION_HORIZON = 60000  -- 60 seconds (1 minute lookahead)
+Engine.TACTICAL_HORIZON = 9000   -- 9 seconds (6 GCDs) for tactical decisions
+Engine.DECISION_HORIZON = 9000   -- Alias for backwards compatibility
 Engine.DECISION_GCD = 1500       -- 1.5s GCD
+
+---------------------------------------
+-- CACHING SYSTEM
+-- Avoids redundant calculations when state hasn't changed
+---------------------------------------
+Engine.Cache = {
+	lastState = nil,
+	lastResult = nil,
+	lastUpdateTime = 0,
+	MIN_UPDATE_INTERVAL = 100,  -- 100ms minimum between full recalculations
+	hits = 0,
+	misses = 0,
+}
+
+-- Check if state changed enough to require recalculation
+function Engine.CacheValid(newState)
+	local cache = Engine.Cache
+	local now = GetTime() * 1000
+
+	-- Always recalculate if enough time has passed
+	if now - cache.lastUpdateTime > 500 then  -- Max 500ms cache lifetime
+		return false
+	end
+
+	-- Minimum interval not passed - use cache
+	if now - cache.lastUpdateTime < cache.MIN_UPDATE_INTERVAL then
+		return true
+	end
+
+	local oldState = cache.lastState
+	if not oldState then return false end
+
+	-- Check for significant changes
+	-- Rage changed by 5+ points
+	if math.abs((newState.rage or 0) - (oldState.rage or 0)) >= 5 then
+		return false
+	end
+
+	-- Stance changed
+	if newState.stance ~= oldState.stance then
+		return false
+	end
+
+	-- Entered or left execute phase
+	local oldExecute = (oldState.targetHPPercent or 100) < 20
+	local newExecute = (newState.targetHPPercent or 100) < 20
+	if oldExecute ~= newExecute then
+		return false
+	end
+
+	-- Overpower proc appeared/expired
+	if (oldState.overpowerReady or false) ~= (newState.overpowerReady or false) then
+		return false
+	end
+
+	-- Any major cooldown came off cooldown
+	local majorCDs = {"Bloodthirst", "Whirlwind", "MortalStrike", "Overpower", "DeathWish", "Recklessness"}
+	for _, cd in ipairs(majorCDs) do
+		local oldCD = oldState.cooldowns and oldState.cooldowns[cd] or 0
+		local newCD = newState.cooldowns and newState.cooldowns[cd] or 0
+		-- CD just became ready
+		if oldCD > 0 and newCD <= 0 then
+			return false
+		end
+	end
+
+	-- GCD ended
+	if (oldState.gcdEnd or 0) > 0 and (newState.gcdEnd or 0) <= 0 then
+		return false
+	end
+
+	-- Enemy count changed
+	if (oldState.enemyCount or 1) ~= (newState.enemyCount or 1) then
+		return false
+	end
+
+	-- Cache is valid
+	return true
+end
+
+-- Update cache with new result
+function Engine.UpdateCache(state, result)
+	Engine.Cache.lastState = state
+	Engine.Cache.lastResult = result
+	Engine.Cache.lastUpdateTime = GetTime() * 1000
+	Engine.Cache.misses = Engine.Cache.misses + 1
+end
+
+-- Get cached result
+function Engine.GetCachedResult()
+	Engine.Cache.hits = Engine.Cache.hits + 1
+	return Engine.Cache.lastResult
+end
 
 ---------------------------------------
 -- Deep copy state for branching
@@ -1802,8 +1895,20 @@ function Engine.CaptureCurrentState()
 
 	---------------------------------------
 	-- INTERRUPT STATE (for Pummel)
+	-- Uses new CastingTracker for reliable detection
 	---------------------------------------
-	state.shouldInterrupt = ATW.State and ATW.State.Interrupt or false
+	state.shouldInterrupt = false
+	state.interruptTargetGUID = nil
+
+	if AutoTurtleWarrior_Config.PummelEnabled and ATW.ShouldInterrupt then
+		local shouldInt, targetGUID, spellName = ATW.ShouldInterrupt()
+		state.shouldInterrupt = shouldInt
+		state.interruptTargetGUID = targetGUID
+		state.interruptSpellName = spellName
+	elseif ATW.State and ATW.State.Interrupt then
+		-- Legacy fallback: combat log detection
+		state.shouldInterrupt = true
+	end
 
 	---------------------------------------
 	-- COMBAT STATE (for Charge - only works out of combat)
@@ -2334,9 +2439,9 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- Death Wish (any stance, OFF-GCD, +20% damage)
-	-- Major DPS cooldown - use when available
+	-- Major DPS cooldown - controlled by Burst toggle
 	---------------------------------------
-	if ATW.Talents and ATW.Talents.HasDW then
+	if ATW.IsCooldownAllowed("DeathWish") and ATW.Talents and ATW.Talents.HasDW then
 		local dwReady = (state.cooldowns.DeathWish or 0) <= 0
 		local dwCost = 10
 		if dwReady and not state.hasDeathWish and rage >= dwCost then
@@ -2346,9 +2451,9 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- Recklessness (Berserker only, OFF-GCD, +100% crit)
-	-- Major cooldown - use carefully
+	-- Major cooldown - controlled by Reckless toggle
 	---------------------------------------
-	if hasSpell("Recklessness") and ATW.AvailableStances and ATW.AvailableStances[3] then
+	if ATW.IsCooldownAllowed("Recklessness") and hasSpell("Recklessness") and ATW.AvailableStances and ATW.AvailableStances[3] then
 		local reckReady = (state.cooldowns.Recklessness or 0) <= 0
 		if reckReady and not state.hasRecklessness then
 			if stance == 3 then
@@ -2360,10 +2465,11 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- RACIAL ABILITIES (TurtleWoW)
+	-- Controlled by Burst toggle
 	---------------------------------------
 
 	-- Blood Fury (Orc): +AP = level*2, OFF-GCD, 2min CD
-	if ATW.Racials and ATW.Racials.HasBloodFury then
+	if ATW.IsCooldownAllowed("BloodFury") and ATW.Racials and ATW.Racials.HasBloodFury then
 		local bfReady = (state.cooldowns.BloodFury or 0) <= 0
 		if bfReady and not state.hasBloodFury then
 			-- Blood Fury is off-GCD in TurtleWoW, usable in any stance
@@ -2372,7 +2478,7 @@ function Engine.GetValidActions(state)
 	end
 
 	-- Berserking (Troll): 10-15% haste, costs 5 rage, 3min CD
-	if ATW.Racials and ATW.Racials.HasBerserking then
+	if ATW.IsCooldownAllowed("Berserking") and ATW.Racials and ATW.Racials.HasBerserking then
 		local berserkReady = (state.cooldowns.Berserking or 0) <= 0
 		local berserkCost = 5
 		if berserkReady and not state.hasBerserking and rage >= berserkCost then
@@ -2381,7 +2487,7 @@ function Engine.GetValidActions(state)
 	end
 
 	-- Perception (Human): +2% crit for 20s, OFF-GCD, 3min CD
-	if ATW.Racials and ATW.Racials.HasPerception then
+	if ATW.IsCooldownAllowed("Perception") and ATW.Racials and ATW.Racials.HasPerception then
 		local percReady = (state.cooldowns.Perception or 0) <= 0
 		if percReady and not state.hasPerception then
 			table.insert(actions, {name = "Perception", stance = stance, rage = 0, needsDance = false, offGCD = true})
@@ -2407,16 +2513,33 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- Pummel (Battle/Berserker, OFF-GCD interrupt)
-	-- Only when interrupt is needed
+	-- ONLY suggested when interrupt is needed (not in normal rotation)
+	-- Controlled by PummelEnabled toggle
 	---------------------------------------
-	if hasSpell("Pummel") and state.shouldInterrupt then
+	if AutoTurtleWarrior_Config.PummelEnabled and hasSpell("Pummel") and state.shouldInterrupt then
 		local pummelReady = (state.cooldowns.Pummel or 0) <= 0
 		local pummelCost = 10
 		if pummelReady and rage >= pummelCost then
 			if stance == 1 or stance == 3 then
-				table.insert(actions, {name = "Pummel", stance = stance, rage = pummelCost, needsDance = false, offGCD = true})
+				table.insert(actions, {
+					name = "Pummel",
+					stance = stance,
+					rage = pummelCost,
+					needsDance = false,
+					offGCD = true,
+					isInterrupt = true,  -- Mark as interrupt action
+					targetGUID = state.interruptTargetGUID,  -- GUID to interrupt
+				})
 			elseif canUse(3, pummelCost) then
-				table.insert(actions, {name = "Pummel", stance = 3, rage = pummelCost, needsDance = true, offGCD = true})
+				table.insert(actions, {
+					name = "Pummel",
+					stance = 3,
+					rage = pummelCost,
+					needsDance = true,
+					offGCD = true,
+					isInterrupt = true,
+					targetGUID = state.interruptTargetGUID,
+				})
 			end
 		end
 	end
@@ -2964,17 +3087,75 @@ function Engine.SimulateDecisionHorizon(state, firstAction, horizon)
 end
 
 ---------------------------------------
--- Main decision function: Simulate all
--- valid actions and return the best one
+-- Main decision function: Two-layer architecture
+-- 1. Check Strategic layer for priority cooldowns
+-- 2. Use Tactical simulation for rotation abilities
+-- 3. Use caching to avoid redundant calculations
 ---------------------------------------
 function Engine.GetBestAction()
 	local state = Engine.CaptureCurrentState()
+
+	---------------------------------------
+	-- CACHING: Return cached result if state hasn't changed significantly
+	---------------------------------------
+	if Engine.CacheValid(state) then
+		local cached = Engine.GetCachedResult()
+		if cached then
+			return cached.bestAction, cached.bestDamage, cached.results
+		end
+	end
+
+	---------------------------------------
+	-- STRATEGIC LAYER: Check for priority cooldowns
+	-- These override tactical decisions when the plan says to use them NOW
+	---------------------------------------
+	local strategicAction = nil
+
+	if ATW.Strategic then
+		local priorityCD, priority = ATW.Strategic.GetPriorityCooldown(state)
+
+		if priorityCD and priority >= 70 then  -- High priority threshold
+			-- Find this cooldown in valid actions
+			local actions = Engine.GetValidActions(state)
+			for _, action in ipairs(actions) do
+				if action.name == priorityCD then
+					strategicAction = action
+					strategicAction.strategicPriority = priority
+					strategicAction.strategicReason = "Strategic plan"
+					break
+				end
+			end
+
+			-- If cooldown is ready but not in actions, create action for it
+			if not strategicAction then
+				local ability = ATW.Abilities and ATW.Abilities[priorityCD]
+				if ability then
+					local cd = state.cooldowns and state.cooldowns[priorityCD] or 999999
+					if cd <= 0 then
+						strategicAction = {
+							name = priorityCD,
+							stance = state.stance,
+							rage = ability.rage or 0,
+							needsDance = false,
+							offGCD = not ability.gcd,
+							strategicPriority = priority,
+							strategicReason = "Strategic plan",
+						}
+					end
+				end
+			end
+		end
+	end
+
+	---------------------------------------
+	-- TACTICAL LAYER: Simulate valid actions
+	---------------------------------------
 	local actions = Engine.GetValidActions(state)
-	local horizon = Engine.DECISION_HORIZON
+	local horizon = Engine.TACTICAL_HORIZON
 
 	local bestAction = nil
 	local bestDamage = -1
-	local results = {}  -- For debugging
+	local results = {}
 
 	for _, action in ipairs(actions) do
 		local totalDamage = Engine.SimulateDecisionHorizon(state, action, horizon)
@@ -2994,9 +3175,35 @@ function Engine.GetBestAction()
 		end
 	end
 
-	-- Store last decision results for debugging
+	---------------------------------------
+	-- DECISION: Strategic overrides Tactical for high-priority cooldowns
+	-- But only if they're worth using (not negative DPS)
+	---------------------------------------
+	if strategicAction then
+		-- Strategic cooldowns are always worth using when planned
+		-- They've already been evaluated at the strategic level
+		bestAction = strategicAction
+		-- Add to results for debugging
+		table.insert(results, {
+			name = strategicAction.name,
+			damage = bestDamage + 1000,  -- Artificial boost to show it was chosen
+			needsDance = strategicAction.needsDance,
+			strategic = true,
+		})
+	end
+
+	---------------------------------------
+	-- Store results and update cache
+	---------------------------------------
 	Engine.lastDecisionResults = results
 	Engine.lastBestAction = bestAction
+
+	-- Update cache
+	Engine.UpdateCache(state, {
+		bestAction = bestAction,
+		bestDamage = bestDamage,
+		results = results,
+	})
 
 	return bestAction, bestDamage, results
 end

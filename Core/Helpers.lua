@@ -35,8 +35,12 @@ end
 
 function ATW.Ready(spell)
 	local id = ATW.SpellID(spell)
-	if not id then return nil end
+	if not id then return true end  -- Assume ready if spell not in spellbook (racials, etc.)
 	local start, dur = GetSpellCooldown(id, 0)
+	-- Ignore GCD (duration ~1.5s) - only check actual spell cooldowns
+	if dur and dur > 0 and dur <= 1.5 then
+		return true  -- GCD active but spell itself is ready
+	end
 	return start == 0 and dur == 0
 end
 
@@ -50,6 +54,10 @@ function ATW.GetCooldownRemaining(spell)
 	local start, dur = GetSpellCooldown(id, 0)
 	if not start or start == 0 or not dur or dur == 0 then
 		return 0  -- Ready
+	end
+	-- Ignore GCD (duration ~1.5s) - only track actual spell cooldowns
+	if dur <= 1.5 then
+		return 0  -- GCD, not real cooldown
 	end
 	local remaining = (start + dur) - GetTime()
 	if remaining <= 0 then

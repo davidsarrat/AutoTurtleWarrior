@@ -1,29 +1,111 @@
 # Simulation Engine
 
-100% simulation-based decision system (Zebouski-style). **NO HARDCODED PRIORITIES**.
+Two-layer architecture: **Strategic Planning** + **Tactical Simulation**. No hardcoded priorities.
 
-## Overview
+## Architecture Overview
 
-The addon uses a **pure simulation approach** to determine the optimal ability at any moment:
+```
+┌─────────────────────────────────────────────────────────────┐
+│  STRATEGIC LAYER (Sim/Strategic.lua)                        │
+│  ─────────────────────────────────────────────────────────  │
+│  Runs: Every 2-5 seconds                                    │
+│  Purpose: Long-term cooldown planning                       │
+│                                                             │
+│  Decisions:                                                 │
+│  - When to use Death Wish, Recklessness, racials           │
+│  - Cooldown synergy (stack Blood Fury + Death Wish)        │
+│  - Save Recklessness for execute phase?                    │
+│  - Rend spreading vs Cleave pure strategy                  │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  TACTICAL LAYER (Sim/Engine.lua)                            │
+│  ─────────────────────────────────────────────────────────  │
+│  Runs: Every 100-200ms (with caching)                       │
+│  Purpose: Which ability to use NOW                          │
+│                                                             │
+│  Decisions:                                                 │
+│  - BT vs WW vs HS vs Cleave                                │
+│  - Execute priority in execute phase                        │
+│  - Overpower on dodge procs                                │
+│  - Rend application on specific targets                    │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  CACHE LAYER                                                │
+│  ─────────────────────────────────────────────────────────  │
+│  Purpose: Avoid redundant calculations, reduce lag          │
+│                                                             │
+│  - Skip recalculation if state unchanged                    │
+│  - Minimum 100ms between full simulations                  │
+│  - Invalidate on: rage change, stance change, CD ready     │
+└─────────────────────────────────────────────────────────────┘
+```
 
-1. **Capture State**: Snapshot current combat state (all enemies, Rend status, cooldowns, combat state)
-2. **Generate Actions**: List all valid actions from current state (only learned spells!)
-3. **Simulate Each**: For each action, simulate 60 seconds (1 minute) of combat
-4. **Compare Damage**: Pick the action that yields highest total damage
+## Strategic Layer
 
-This is the same approach used by the [Zebouski WarriorSim](https://zebouski.github.io/WarriorSim-TurtleWoW/).
+### File: `Sim/Strategic.lua`
 
-## Core Functions
+Plans long-term cooldown usage:
+
+```lua
+Strategic.GetPlan(state)
+    └── Strategic.CreatePlan()
+            ├── EstimateTimeToExecute()   -- When will boss hit 20%?
+            ├── PlanCooldowns()           -- When to use each CD
+            │   ├── Recklessness: Save for execute or use now?
+            │   ├── Death Wish: Use on cooldown
+            │   ├── Blood Fury: Sync with Death Wish?
+            │   └── Berserking: Sync with Death Wish?
+            └── DetermineAoEStrategy()    -- Rend spread vs Cleave
+```
+
+### Cooldown Synergy
+
+Death Wish + racials are **multiplicative**, not additive:
+
+```
+Death Wish: +20% damage (1.2x multiplier)
+Blood Fury: +120 AP (more damage per ability)
+Berserking: +10% haste (more attacks)
+
+Together = much more than separately!
+```
+
+### Execute Phase Planning
+
+```lua
+if timeToExecute < 45000 then  -- Execute in < 45s
+    -- SAVE Recklessness for 100% crit Executes
+    plan.cooldowns.Recklessness = { action = "save", useAt = "execute_phase" }
+else
+    -- Execute far away, consider using for uptime
+end
+```
+
+## Tactical Layer
 
 ### File: `Sim/Engine.lua`
 
 ```
 Engine.GetRecommendation()
-    └── Engine.GetRecommendationSimBased()
-            └── Engine.GetBestAction()
-                    ├── Engine.CaptureCurrentState()  -- Get combat state
-                    ├── Engine.GetValidActions()      -- List valid actions (hasSpell checks!)
-                    └── Engine.SimulateDecisionHorizon()  -- Simulate each
+    └── Engine.GetBestAction()
+            ├── Check cache (skip if state unchanged)
+            ├── Strategic.GetPriorityCooldown()  -- Strategic override?
+            ├── Engine.CaptureCurrentState()     -- Snapshot game state
+            ├── Engine.GetValidActions()         -- All valid abilities
+            └── Engine.SimulateDecisionHorizon() -- 9s lookahead (6 GCDs)
+```
+
+### Tactical Horizon
+
+Simulates **9 seconds** (6 GCDs) ahead - enough for rotation decisions without lag:
+
+```lua
+Engine.TACTICAL_HORIZON = 9000  -- 9 seconds
+-- Previously was 60000 (60s) which caused lag
 ```
 
 ## Decision Flow
@@ -506,17 +588,37 @@ The simulation **naturally handles all edge cases** because it calculates actual
 ## Debug Commands
 
 ```
-/atw decision   - Show current decision comparison (all actions + damage)
-/atw sim        - Show 30s combat simulation
+/atw plan       - Show strategic cooldown plan (DW, Reck, racials)
+/atw decision   - Show tactical decision comparison (all actions + damage)
+/atw cache      - Show cache statistics (hit rate, update frequency)
+/atw aoe        - Show AoE strategy analysis (Rend vs Cleave)
+/atw sim        - Simulate next 5 abilities
 /atw rend       - Show Rend decision info
 /atw spells     - Show which abilities are detected as learned
+```
+
+### Example Output: /atw plan
+
+```
+=== Strategic Plan ===
+Phase: normal
+Time to Execute: 45.2s
+AoE Strategy: rend_spread
+
+Cooldown Plan:
+  DeathWish: use_now (P80)
+    -> Sync with BloodFury
+  BloodFury: use_now (P75)
+    -> Sync with Death Wish
+  Recklessness: save
+    -> Execute phase in 45s
 ```
 
 ### Example Output: /atw decision
 
 ```
 === Decision Simulator ===
-Horizon: 60s
+Horizon: 9s (6 GCDs)
 
 Action comparison:
   Bloodthirst: 4850 dmg << BEST
@@ -528,7 +630,6 @@ Action comparison:
 Current state:
   Rage: 65
   Stance: 3
-  In Combat: YES
   Battle Shout: YES
   Rend (target): NO
   Target HP: 75.0%
@@ -538,6 +639,17 @@ Multi-target (3 enemies):
   WW range (8yd): 3
   Rended: 1/3
   Needs Rend: 2
+```
+
+### Example Output: /atw cache
+
+```
+=== Engine Cache Stats ===
+Cache hits: 1523
+Cache misses: 89
+Hit rate: 94.5%
+Min interval: 100ms
+Last update: 45ms ago
 ```
 
 ## Configuration

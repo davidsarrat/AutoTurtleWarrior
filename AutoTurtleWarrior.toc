@@ -19,6 +19,7 @@ Combat\Stance.lua
 Combat\Casting.lua
 Combat\SwingTimer.lua
 Combat\GUIDTargeting.lua
+Combat\Interrupt.lua
 
 # Detection
 Detection\Distance.lua
@@ -28,6 +29,7 @@ Detection\AoE.lua
 # Simulation (load before Rotation)
 Sim\Abilities.lua
 Sim\RageModel.lua
+Sim\Strategic.lua
 Sim\Engine.lua
 Sim\Simulator.lua
 

@@ -17,7 +17,6 @@
 
 ATW.Sim = {
 	-- Simulation settings
-	UseCooldowns = true,  -- Toggle for major cooldowns
 	LookAhead = 3,        -- How many abilities to predict
 	TimeWindow = 30,      -- 30 second simulation window
 
@@ -28,11 +27,6 @@ ATW.Sim = {
 	LastCalc = 0,
 	CachedPriority = nil,
 }
-
----------------------------------------
--- Configuration
----------------------------------------
-ATW.DEFAULT.UseCooldowns = true
 
 ---------------------------------------
 -- Calculate DPR (Damage Per Rage)
@@ -168,7 +162,6 @@ function ATW.GetPriorityList()
 	local stats = ATW.GetSimStats()
 	local rage = UnitMana("player")
 	local stance = ATW.Stance()
-	local useCDs = AutoTurtleWarrior_Config.UseCooldowns
 	local inExecute = ATW.InExecutePhase and ATW.InExecutePhase()
 	local enemyCount = ATW.EnemyCount and ATW.EnemyCount() or 1
 
@@ -187,10 +180,8 @@ function ATW.GetPriorityList()
 	local priorities = {}
 
 	-- Define ability priority order with conditions
+	-- NOTE: Pummel is NOT in this list - it's handled separately via interrupt system
 	local abilityOrder = {
-		-- Interrupts (highest priority)
-		"Pummel",
-
 		-- Buffs that should be maintained
 		"BattleShout",
 
@@ -230,9 +221,10 @@ function ATW.GetPriorityList()
 	for _, abilityName in ipairs(abilityOrder) do
 		local ability = ATW.Abilities[abilityName]
 		if ability then
-			-- Skip cooldowns if disabled
-			if ability.isCooldown and not useCDs then
-				-- Skip
+			-- Skip cooldowns not allowed by current toggle settings
+			local skipCD = ability.isCooldown and not ATW.IsCooldownAllowed(abilityName)
+			if skipCD then
+				-- Skip this cooldown (disabled by toggle)
 			else
 				local canUse, targetStance = ATW.CanUseAbility(abilityName, rage, stance)
 
@@ -317,10 +309,7 @@ function ATW.GetPriorityList()
 						end
 					end
 
-					-- Interrupt is always top priority
-					if abilityName == "Pummel" and ATW.State.Interrupt then
-						dpr = 9999
-					end
+					-- NOTE: Pummel interrupt handled separately via CastingTracker
 
 					-- Apply ability-specific priority modifiers
 					if ability.priorityMod then
@@ -562,12 +551,11 @@ function ATW.SimulateAhead(steps)
 				-- Check condition (simplified for sim)
 				if canUse and ability.condition then
 					-- Skip complex conditions in simulation
+					-- NOTE: Pummel handled separately via Combat/Interrupt.lua, not in simulation
 					if name == "Execute" then
 						canUse = ATW.InExecutePhase and ATW.InExecutePhase()
 					elseif name == "Overpower" then
 						canUse = (i == 1 and ATW.State.Overpower)  -- Only first step
-					elseif name == "Pummel" then
-						canUse = (i == 1 and ATW.State.Interrupt)
 					elseif name == "BattleShout" then
 						canUse = (i == 1 and not ATW.Buff("player", "Ability_Warrior_BattleShout"))
 					elseif name == "Charge" then
@@ -719,12 +707,143 @@ function ATW.PrintSim()
 end
 
 ---------------------------------------
--- Toggle cooldowns mode
+-- Cooldown Toggle System (Priority-based)
+-- BurstEnabled = Death Wish + Racials
+-- RecklessEnabled = Recklessness
+-- Both OFF = Sustain mode
 ---------------------------------------
+
+-- Cooldown categories
+ATW.BURST_COOLDOWNS = {
+	DeathWish = true,
+	BloodFury = true,
+	Berserking = true,
+	Perception = true,
+}
+
+ATW.RECKLESS_COOLDOWNS = {
+	Recklessness = true,
+}
+
+---------------------------------------
+-- CENTRALIZED COOLDOWN CHECK
+-- ALL simulation/decision code MUST use this
+---------------------------------------
+function ATW.IsCooldownAllowed(cdName)
+	local cfg = AutoTurtleWarrior_Config
+
+	-- Check if it's a burst cooldown
+	if ATW.BURST_COOLDOWNS[cdName] then
+		return cfg.BurstEnabled == true
+	end
+
+	-- Check if it's a reckless cooldown
+	if ATW.RECKLESS_COOLDOWNS[cdName] then
+		return cfg.RecklessEnabled == true
+	end
+
+	-- Non-toggle cooldowns (Bloodrage, BerserkerRage, etc.) always allowed
+	return true
+end
+
+---------------------------------------
+-- Toggle functions
+---------------------------------------
+function ATW.SetBurst(enabled)
+	AutoTurtleWarrior_Config.BurstEnabled = enabled
+	if enabled then
+		ATW.Print("Burst: |cff00ff00ON|r (DW + Racials)")
+	else
+		ATW.Print("Burst: |cffff0000OFF|r")
+	end
+	-- Invalidate caches
+	ATW.InvalidateCooldownCache()
+end
+
+function ATW.ToggleBurst()
+	ATW.SetBurst(not AutoTurtleWarrior_Config.BurstEnabled)
+end
+
+function ATW.SetReckless(enabled)
+	AutoTurtleWarrior_Config.RecklessEnabled = enabled
+	if enabled then
+		ATW.Print("Reckless: |cff00ff00ON|r (Recklessness)")
+	else
+		ATW.Print("Reckless: |cffff0000OFF|r")
+	end
+	-- Invalidate caches
+	ATW.InvalidateCooldownCache()
+end
+
+function ATW.ToggleReckless()
+	ATW.SetReckless(not AutoTurtleWarrior_Config.RecklessEnabled)
+end
+
+function ATW.SetSustain()
+	AutoTurtleWarrior_Config.BurstEnabled = false
+	AutoTurtleWarrior_Config.RecklessEnabled = false
+	ATW.Print("Sustain mode: |cff888888All CDs OFF|r")
+	ATW.InvalidateCooldownCache()
+end
+
+---------------------------------------
+-- Invalidate caches when mode changes
+---------------------------------------
+function ATW.InvalidateCooldownCache()
+	-- Clear Strategic plan cache
+	if ATW.Strategic then
+		ATW.Strategic.plan = nil
+		ATW.Strategic.lastPlanTime = 0
+	end
+	-- Clear Engine cache
+	if ATW.Engine and ATW.Engine.Cache then
+		ATW.Engine.Cache.lastState = nil
+		ATW.Engine.Cache.lastResult = nil
+	end
+end
+
+---------------------------------------
+-- Get current mode string for display
+---------------------------------------
+function ATW.GetCooldownModeString()
+	local burst = AutoTurtleWarrior_Config.BurstEnabled
+	local reckless = AutoTurtleWarrior_Config.RecklessEnabled
+
+	if burst and reckless then
+		return "|cffff0000FULL|r (Burst + Reckless)"
+	elseif burst then
+		return "|cffff8800BURST|r (DW + Racials)"
+	elseif reckless then
+		return "|cffff00ffRECKLESS ONLY|r"
+	else
+		return "|cff888888SUSTAIN|r (No CDs)"
+	end
+end
+
+---------------------------------------
+-- Print current CD status
+---------------------------------------
+function ATW.PrintCooldownStatus()
+	local burst = AutoTurtleWarrior_Config.BurstEnabled
+	local reckless = AutoTurtleWarrior_Config.RecklessEnabled
+
+	ATW.Print("=== Cooldown Status ===")
+	ATW.Print("Mode: " .. ATW.GetCooldownModeString())
+	ATW.Print("  Burst: " .. (burst and "|cff00ff00ON|r" or "|cffff0000OFF|r") .. " (DW, Blood Fury, Berserking, Perception)")
+	ATW.Print("  Reckless: " .. (reckless and "|cff00ff00ON|r" or "|cffff0000OFF|r") .. " (Recklessness)")
+end
+
+-- Legacy compatibility
+function ATW.GetCooldownMode()
+	local burst = AutoTurtleWarrior_Config.BurstEnabled
+	local reckless = AutoTurtleWarrior_Config.RecklessEnabled
+	if burst and reckless then return "reckless"
+	elseif burst then return "burst"
+	else return "sustain" end
+end
+
 function ATW.ToggleCooldowns()
-	AutoTurtleWarrior_Config.UseCooldowns = not AutoTurtleWarrior_Config.UseCooldowns
-	local status = AutoTurtleWarrior_Config.UseCooldowns and "ON" or "OFF"
-	ATW.Print("Cooldowns: " .. status)
+	ATW.PrintCooldownStatus()
 end
 
 ---------------------------------------

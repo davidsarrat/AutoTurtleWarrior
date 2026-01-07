@@ -191,6 +191,27 @@ function ATW.Rotation()
 			ATW.Debug("Charge: not in range or in combat")
 			return
 		end
+
+	-- PUMMEL (Interrupt) - GUID targeting for nameplates
+	elseif abilityName == "Pummel" then
+		if targetGUID and ATW.ExecuteInterrupt then
+			-- Use interrupt system with GUID targeting
+			local success = ATW.ExecuteInterrupt(targetGUID)
+			if success then
+				-- Clear casting tracker for this target
+				if ATW.CastingTracker then
+					ATW.CastingTracker.OnCastEnd(targetGUID)
+				end
+			end
+		else
+			-- Fallback: cast on current target
+			ATW.Cast(ability.name, true)
+		end
+		-- Clear legacy interrupt state
+		if ATW.State then
+			ATW.State.Interrupt = nil
+		end
+
 	elseif abilityName == "SweepingStrikes" then
 		-- Self-buff: use CastSelf to avoid inheriting spell target from nameplate
 		ATW.CastSelf(ability.name)
@@ -314,8 +335,8 @@ function ATW.LegacyRotation()
 		end
 	end
 
-	-- Death Wish
-	if talents.HasDW and rage >= 10 and ATW.Ready("Death Wish") and AutoTurtleWarrior_Config.UseCooldowns then
+	-- Death Wish (controlled by Burst toggle)
+	if ATW.IsCooldownAllowed("DeathWish") and talents.HasDW and rage >= 10 and ATW.Ready("Death Wish") then
 		ATW.CastSelf("Death Wish")
 		return
 	end

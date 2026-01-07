@@ -660,10 +660,69 @@ function ATW.IsRacialReady(racialName)
 		return false
 	end
 
-	-- Check cooldown via GetSpellCooldown
-	if ATW.Ready then
-		return ATW.Ready(racialName)
+	-- Check cooldown via GetCooldownRemaining (returns 0 if ready OR spell not found)
+	-- This is more robust than Ready() which returns nil if spell not found
+	if ATW.GetCooldownRemaining then
+		return ATW.GetCooldownRemaining(racialName) <= 0
 	end
 
 	return true  -- Assume ready if we can't check
+end
+
+---------------------------------------
+-- CACHED AVAILABLE ABILITIES
+-- This table is populated once on load and updated on events
+-- Use ATW.Has.AbilityName instead of checking APIs repeatedly
+---------------------------------------
+ATW.Has = {}
+
+function ATW.LoadAvailableAbilities()
+	-- Clear previous state
+	ATW.Has = {}
+
+	---------------------------------------
+	-- Talent-based abilities
+	---------------------------------------
+	ATW.Has.Bloodthirst = ATW.Talents and ATW.Talents.HasBT or false
+	ATW.Has.MortalStrike = ATW.Talents and ATW.Talents.HasMS or false
+	ATW.Has.DeathWish = ATW.Talents and ATW.Talents.HasDW or false
+	ATW.Has.SweepingStrikes = ATW.Talents and ATW.Talents.HasSS or false
+	ATW.Has.ImprovedBerserkerRage = ATW.Talents and ATW.Talents.HasIBR or false
+	ATW.Has.AngerManagement = ATW.Talents and ATW.Talents.AngerManagement or false
+
+	---------------------------------------
+	-- Spell-based abilities (learned by level/trainer)
+	---------------------------------------
+	ATW.Has.Execute = ATW.Spells and ATW.Spells.ExecuteRank and ATW.Spells.ExecuteRank > 0 or false
+	ATW.Has.Rend = ATW.Spells and ATW.Spells.RendRank and ATW.Spells.RendRank > 0 or false
+	ATW.Has.HeroicStrike = ATW.Spells and ATW.Spells.HeroicStrikeRank and ATW.Spells.HeroicStrikeRank > 0 or false
+	ATW.Has.Cleave = ATW.Spells and ATW.Spells.CleaveRank and ATW.Spells.CleaveRank > 0 or false
+	ATW.Has.Overpower = ATW.Spells and ATW.Spells.OverpowerRank and ATW.Spells.OverpowerRank > 0 or false
+	ATW.Has.Whirlwind = ATW.Spells and ATW.Spells.WhirlwindRank and ATW.Spells.WhirlwindRank > 0 or false
+	ATW.Has.Slam = ATW.Spells and ATW.Spells.SlamRank and ATW.Spells.SlamRank > 0 or false
+	ATW.Has.Hamstring = ATW.Spells and ATW.Spells.HamstringRank and ATW.Spells.HamstringRank > 0 or false
+	ATW.Has.BattleShout = ATW.Spells and ATW.Spells.BattleShoutRank and ATW.Spells.BattleShoutRank > 0 or false
+	ATW.Has.Charge = ATW.Spells and ATW.Spells.ChargeRank and ATW.Spells.ChargeRank > 0 or false
+	ATW.Has.Bloodrage = ATW.Spells and ATW.Spells.BloodrageRank and ATW.Spells.BloodrageRank > 0 or false
+	ATW.Has.BerserkerRage = ATW.Spells and ATW.Spells.BerserkerRageRank and ATW.Spells.BerserkerRageRank > 0 or false
+	ATW.Has.Pummel = ATW.Spells and ATW.Spells.PummelRank and ATW.Spells.PummelRank > 0 or false
+	ATW.Has.Recklessness = ATW.Spells and ATW.Spells.RecklessnessRank and ATW.Spells.RecklessnessRank > 0 or false
+
+	---------------------------------------
+	-- Racial abilities
+	---------------------------------------
+	ATW.Has.BloodFury = ATW.Racials and ATW.Racials.HasBloodFury or false
+	ATW.Has.Berserking = ATW.Racials and ATW.Racials.HasBerserking or false
+	ATW.Has.Perception = ATW.Racials and ATW.Racials.HasPerception or false
+
+	---------------------------------------
+	-- Debug output
+	---------------------------------------
+	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+		local count = 0
+		for k, v in pairs(ATW.Has) do
+			if v then count = count + 1 end
+		end
+		ATW.Print("Available abilities cached: " .. count .. " total")
+	end
 end

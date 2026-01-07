@@ -242,7 +242,6 @@ end
 -- Event types: "MAINHAND", "OFFHAND", "START", "CAST", "FAIL", "CHANNEL"
 ---------------------------------------
 function ATW.OnUnitCastEvent(casterGUID, targetGUID, eventType, spellID, duration)
-	-- Only process player events
 	if not casterGUID then return end
 
 	-- Get player GUID
@@ -255,8 +254,33 @@ function ATW.OnUnitCastEvent(casterGUID, targetGUID, eventType, spellID, duratio
 		if ok then playerGUID = guid end
 	end
 
-	-- Not player's event
-	if not playerGUID or casterGUID ~= playerGUID then return end
+	---------------------------------------
+	-- ENEMY CAST DETECTION (for interrupts)
+	-- Track when hostile units start casting
+	---------------------------------------
+	if casterGUID ~= playerGUID then
+		-- Check if caster is hostile
+		local isHostile = false
+		if ATW.HasSuperWoW and ATW.HasSuperWoW() then
+			local ok, result = pcall(function() return UnitCanAttack("player", casterGUID) end)
+			if ok then isHostile = (result == 1) end
+		end
+
+		if isHostile and ATW.CastingTracker then
+			if eventType == "START" or eventType == "CHANNEL" then
+				-- Enemy started casting - track it
+				ATW.CastingTracker.OnCastStart(casterGUID, spellID, duration)
+			elseif eventType == "CAST" or eventType == "FAIL" then
+				-- Cast ended (completed or interrupted)
+				ATW.CastingTracker.OnCastEnd(casterGUID)
+			end
+		end
+		return  -- Not player event, stop here
+	end
+
+	---------------------------------------
+	-- PLAYER EVENT HANDLING (swings, Rend confirmation)
+	---------------------------------------
 
 	local swing = ATW.Swing
 	local now = GetTime()
