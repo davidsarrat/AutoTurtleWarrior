@@ -1824,6 +1824,15 @@ function Engine.CaptureCurrentState()
 	-- Current stance
 	state.stance = ATW.Stance and ATW.Stance() or 3
 
+	-- Stance GCD: check if we recently switched stances (1.5s internal CD)
+	state.stanceGcdEnd = 0
+	if ATW.State and ATW.State.LastStance then
+		local stanceCdRemaining = (ATW.State.LastStance + 1.5) - GetTime()
+		if stanceCdRemaining > 0 then
+			state.stanceGcdEnd = stanceCdRemaining * 1000  -- Convert to ms
+		end
+	end
+
 	---------------------------------------
 	-- CAPTURE REAL GCD STATE
 	-- Check any GCD-triggering spell to detect active GCD
@@ -2569,6 +2578,20 @@ function Engine.GetValidActions(state)
 	---------------------------------------
 	table.insert(actions, {name = "Wait", stance = stance, rage = 0, needsDance = false})
 
+	---------------------------------------
+	-- Filter out needsDance actions if stance GCD is active
+	-- Can't switch stances until the 1.5s internal CD is over
+	---------------------------------------
+	if state.stanceGcdEnd and state.stanceGcdEnd > 0 then
+		local filteredActions = {}
+		for _, action in ipairs(actions) do
+			if not action.needsDance then
+				table.insert(filteredActions, action)
+			end
+		end
+		return filteredActions
+	end
+
 	return actions
 end
 
@@ -2821,6 +2844,14 @@ function Engine.GetActionDamage(state, action)
 	if state.buffs.Enrage or state.hasEnrage then dmgMod = dmgMod * 1.15 end
 	if state.buffs.DeathWish or state.hasDeathWish then dmgMod = dmgMod * 1.20 end
 	-- Recklessness doesn't increase damage directly, it increases crit
+
+	-- Two-Handed Weapon Specialization: +1/2/3/4/5% damage with 2H weapons
+	if not state.hasOffHand then  -- No offhand = using 2H weapon
+		local twoHandSpec = ATW.Talents and ATW.Talents.TwoHandSpec or 0
+		if twoHandSpec > 0 then
+			dmgMod = dmgMod * (1 + twoHandSpec * 0.01)  -- +1% per point
+		end
+	end
 
 	-- Defensive Stance: -10% damage dealt
 	if stanceAfterAction == 2 then

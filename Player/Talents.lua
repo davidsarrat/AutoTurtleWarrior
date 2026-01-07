@@ -462,6 +462,12 @@ function ATW.LoadTalents()
 	_, _, _, _, r = GetTalentInfo(1, 11)
 	ATW.Talents.DeepWounds = r  -- 0/1/2/3 points
 
+	-- Two-Handed Weapon Specialization (Arms tier 4)
+	-- +1/2/3/4/5% damage with 2H weapons
+	-- Note: Slot may need verification for TurtleWoW tree
+	_, _, _, _, r = GetTalentInfo(1, 7)
+	ATW.Talents.TwoHandSpec = r  -- 0-5 points
+
 	-- Impale (Arms tier 6, slot 2)
 	-- +10/20% crit damage on abilities
 	_, _, _, _, r = GetTalentInfo(1, 12)
