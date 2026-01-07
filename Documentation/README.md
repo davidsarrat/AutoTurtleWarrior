@@ -39,9 +39,10 @@ The addon uses a **100% simulation-based approach** (Zebouski-style) with **no h
 3. **Simulate Each** - For each action, simulate **9 seconds** (6 GCDs) tactical horizon
 4. **Compare Damage** - Pick the action that yields highest total damage
 
-**Two-Layer Architecture:**
-- **Strategic Layer** (every 2-5s): Plans cooldown usage, Rend spread vs Cleave strategy (30s lookahead)
-- **Tactical Layer** (every frame): Decides immediate ability (9s lookahead)
+**Single-Layer Tactical Simulation:**
+- Runs every frame (with caching): Decides immediate ability with 9s lookahead
+- Cooldowns controlled via manual toggles (`/atw burst`, `/atw reckless`)
+- Optional CD sync waits for Death Wish before using racials (`/atw sync`)
 
 This approach automatically handles edge cases like:
 - Charge availability (out of combat only)
@@ -111,7 +112,6 @@ AutoTurtleWarrior/
 ├── Sim/
 │   ├── Abilities.lua     - Ability definitions and damage formulas
 │   ├── RageModel.lua     - Rage generation formulas (Zebouski)
-│   ├── Strategic.lua     - Long-term cooldown planning (30s)
 │   ├── Engine.lua        - Combat simulation engine (9s tactical)
 │   └── Simulator.lua     - Time-window sim, cooldown toggles
 ├── Rotation/
@@ -121,16 +121,16 @@ AutoTurtleWarrior/
 ├── Commands/
 │   ├── SlashCommands.lua - Chat commands (/atw)
 │   └── Events.lua        - Event registration and handling
-└── docs/
+└── Documentation/
     ├── README.md         - This file
     ├── Architecture.md   - Code structure overview
     ├── Simulation.md     - Simulation engine details
-    ├── Toggles.md        - Cooldown toggle system
+    ├── Toggles.md        - Cooldown & mode toggle system
     ├── Interrupt.md      - Auto-interrupt system
     ├── Rend.md           - Rend tracking system
     ├── TTD.md            - Time To Die algorithm
     ├── Spells.md         - Spell rank detection
-    ├── AoE.md            - AoE detection
+    ├── AoE.md            - AoE detection & Sweeping Strikes
     ├── Detection.md      - SuperWoW/UnitXP detection
     └── SwingTimer.md     - Swing timer tracking
 ```
@@ -142,12 +142,10 @@ GetBestAction()
     ├── CacheValid?                    -- Skip if state unchanged (100ms min)
     │   └── Return cached result
     │
-    ├── Strategic.GetPriorityCooldown() -- Check strategic layer
-    │   └── High priority CD? → Use it (override tactical)
-    │
     └── Tactical Simulation
         ├── CaptureCurrentState()      -- Full combat snapshot
-        ├── GetValidActions()          -- Only LEARNED spells
+        ├── GetValidActions()          -- Only LEARNED spells + CD sync
+        │   └── Racials wait for DW if SyncCooldowns enabled
         └── For each action:
                 SimulateDecisionHorizon()  -- Simulate 9s (6 GCDs)
                         └── Greedy best action for remaining time

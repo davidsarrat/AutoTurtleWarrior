@@ -32,6 +32,8 @@ ATW.DEFAULT = {
 	AoEEnabled = true,
 	-- Rend spreading toggle (true = spread to multiple targets, false = main target only)
 	RendSpread = true,
+	-- Sync racials with Death Wish (wait up to 10s for DW before using racials)
+	SyncCooldowns = true,
 }
 
 ---------------------------------------

@@ -196,9 +196,61 @@ function ATW.GetUnitTTD(guid)
         return 300  -- Cap at 5 minutes
     end
 
+    -- CONSERVATIVE ADJUSTMENTS (see below)
+    ttd = ApplyConservativeAdjustments(ttd, currentHPPercent)
+
     return ttd
 end
 ```
+
+## Conservative Adjustments
+
+Linear regression tends to **overestimate** TTD because:
+1. Execute phase (< 20% HP) = much faster death (Execute spam)
+2. Burst damage phases aren't modeled
+3. Other players' damage is unpredictable
+
+### Execute Range Modifier
+
+```lua
+local currentHPPercent = (lastSample.hp / maxHP) * 100
+
+-- Targets die MUCH faster below 20%
+if currentHPPercent < 20 then
+    ttd = ttd * 0.4  -- 60% faster death in execute range
+elseif currentHPPercent < 35 then
+    ttd = ttd * 0.65  -- 35% faster approaching execute
+elseif currentHPPercent < 50 then
+    ttd = ttd * 0.8  -- 20% faster at half HP
+end
+```
+
+### HP-Based Hard Caps
+
+As a fallback for regression errors, we apply hard caps based on current HP:
+
+```lua
+-- Conservative estimates based on typical kill speeds
+if currentHPPercent < 10 then
+    ttd = math.min(ttd, 5)   -- < 10% HP = max 5s
+elseif currentHPPercent < 20 then
+    ttd = math.min(ttd, 10)  -- < 20% HP = max 10s
+elseif currentHPPercent < 30 then
+    ttd = math.min(ttd, 18)  -- < 30% HP = max 18s
+end
+```
+
+### Why These Values?
+
+| HP Range | Modifier | Hard Cap | Reasoning |
+|----------|----------|----------|-----------|
+| < 10% | 0.4x | 5s max | Execute spam + multiple players |
+| 10-20% | 0.4x | 10s max | Heavy Execute phase |
+| 20-35% | 0.65x | - | Approaching execute, increased pressure |
+| 35-50% | 0.8x | - | Fight is established |
+| 50%+ | 1.0x | 300s max | Full regression, capped at 5 min |
+
+These adjustments make TTD more conservative for Rend decisions - better to **not** Rend a target that dies quickly than to waste rage on a useless DoT.
 
 ## Data Sources
 

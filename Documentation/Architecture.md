@@ -122,7 +122,7 @@ The addon loads modules in a specific order defined in the `.toc` file:
 ```
 ┌────────────────────┐     ┌─────────────────────┐     ┌────────────────┐
 │ CaptureCurrentState│ →   │ GetValidActions()   │ →   │ GetBestAction()│
-│ (full combat state)│     │ (hasSpell checks!)  │     │ (simulate 60s) │
+│ (full combat state)│     │ (hasSpell checks!)  │     │ (simulate 9s)  │
 └────────────────────┘     └─────────────────────┘     └────────────────┘
         ↑                          ↑                          ↑
         │                          │                          │
@@ -144,15 +144,15 @@ AutoTurtleWarrior_Config = {
     PrimaryStance = 0,      -- 0=auto, 3=Berserker
     DanceRage = 10,         -- Min rage to stance dance
     MaxRage = 60,           -- Rage cap consideration
-    AoE = "auto",           -- "on", "off", "auto"
-    AoECount = 3,           -- Enemies for auto AoE
-    WWRange = 8,            -- Whirlwind range
+
+    -- AoE System (see Toggles.md)
+    AoEEnabled = true,      -- Auto AoE based on enemy count (false = single target)
+    RendSpread = true,      -- Spread Rend to multiple targets (false = main target only)
 
     -- Cooldown Toggle System (see Toggles.md)
-    -- Priority: BurstEnabled + RecklessEnabled stack
-    -- Both OFF = sustain mode (no cooldowns)
     BurstEnabled = true,    -- Death Wish + Racials (Blood Fury, Berserking, Perception)
     RecklessEnabled = false, -- Recklessness (save for execute or manual)
+    SyncCooldowns = true,   -- Racials wait for Death Wish (up to 10s)
 
     -- Auto-Interrupt System (see Interrupt.md)
     PummelEnabled = true,   -- Auto-interrupt with Pummel via CastingTracker

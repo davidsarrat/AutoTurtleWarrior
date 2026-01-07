@@ -1,6 +1,6 @@
-# Cooldown Toggle System
+# Toggle System
 
-The addon uses a priority-based toggle system for cooldown management, allowing fine-grained control over which cooldowns are used.
+The addon uses toggles for cooldown management, AoE behavior, and utility features.
 
 ## Overview
 
@@ -20,15 +20,46 @@ The addon uses a priority-based toggle system for cooldown management, allowing 
 │                                                             │
 │  Note: Toggles STACK - both ON = all cooldowns             │
 └─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  AOE MODES                                                  │
+│  ─────────────────────────────────────────────────────────  │
+│                                                             │
+│  AUTO AOE (AoEEnabled = true):                              │
+│  └── WW/Cleave based on enemy count (default)              │
+│                                                             │
+│  SINGLE TARGET (AoEEnabled = false):                        │
+│  └── Funnel mode - no Rend spread, ST priority             │
+│                                                             │
+│  REND SPREAD (RendSpread = true):                          │
+│  └── Apply Rend to multiple targets (auto-disabled if      │
+│      AoEEnabled = false)                                   │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  CD SYNC (SyncCooldowns = true)                            │
+│  ─────────────────────────────────────────────────────────  │
+│                                                             │
+│  When enabled: Racials wait up to 10s for Death Wish       │
+│  When disabled: All CDs used independently on cooldown     │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Configuration
 
 ```lua
 AutoTurtleWarrior_Config = {
+    -- Cooldowns
     BurstEnabled = true,     -- Death Wish + Racials
     RecklessEnabled = false, -- Recklessness
-    PummelEnabled = true,    -- Auto-interrupt (separate system)
+    SyncCooldowns = true,    -- Racials wait for Death Wish
+
+    -- AoE
+    AoEEnabled = true,       -- Auto AoE based on enemy count
+    RendSpread = true,       -- Spread Rend to multiple targets
+
+    -- Utility
+    PummelEnabled = true,    -- Auto-interrupt (see Interrupt.md)
 }
 ```
 
@@ -51,6 +82,8 @@ AutoTurtleWarrior_Config = {
 
 ## Slash Commands
 
+### Cooldown Toggles
+
 ```
 /atw burst          - Toggle BurstEnabled
 /atw burst on       - Enable burst mode
@@ -62,7 +95,31 @@ AutoTurtleWarrior_Config = {
 
 /atw sustain        - Disable all cooldowns (both OFF)
 
-/atw mode           - Show current mode status
+/atw sync           - Toggle SyncCooldowns
+/atw sync on        - Enable CD sync (racials wait for DW)
+/atw sync off       - Disable CD sync (use independently)
+
+/atw cd             - Show current cooldown status and toggles
+```
+
+### AoE Toggles
+
+```
+/atw aoemode        - Toggle AoEEnabled (auto/single target)
+/atw aoemode on     - Enable auto AoE mode
+/atw aoemode off    - Enable single target mode
+
+/atw rendspread     - Toggle RendSpread
+/atw rendspread on  - Enable Rend spreading
+/atw rendspread off - Disable Rend spreading (main target only)
+```
+
+### Utility Toggles
+
+```
+/atw pummel         - Toggle auto-interrupt
+/atw pummel on      - Enable auto-interrupt
+/atw pummel off     - Disable auto-interrupt
 ```
 
 ## Implementation
@@ -107,9 +164,9 @@ end
 The toggle system is checked at multiple points:
 
 1. **Engine.lua - GetValidActions()**: Excludes disabled cooldowns from action list
-2. **Strategic.lua - GetPriorityCooldown()**: Respects toggles for strategic planning
-3. **Simulator.lua - SimulateTimeWindow()**: Excludes disabled CDs from time simulation
-4. **Rotation.lua - LegacyRotation()**: Respects toggles in fallback rotation
+2. **Engine.lua - shouldWaitForDWSync()**: Handles CD sync for racials
+3. **Engine.lua - CaptureCurrentState()**: Skips enemy list if AoE disabled
+4. **Simulator.lua - SimulateTimeWindow()**: Excludes disabled CDs from time simulation
 
 ### Cache Invalidation
 
@@ -156,9 +213,16 @@ end
 
 ### Execute Phase Burst
 
-The Strategic layer automatically considers saving Recklessness for execute:
-- If execute phase < 45s away, may hold Recklessness
-- 100% crit Executes = massive damage
+With manual toggles, you control when to pop Recklessness:
+- Keep RecklessEnabled OFF during boss normal phase
+- Enable it when entering execute phase for 100% crit Executes
+- Combine with `/atw burst on` for maximum damage
+
+```
+/atw burst on
+/atw reckless on
+/atw
+```
 
 ## Macro Examples
 

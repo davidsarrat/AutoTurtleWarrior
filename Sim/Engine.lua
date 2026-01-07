@@ -5,8 +5,9 @@
 
 	ARCHITECTURE:
 	=============
-	This is the TACTICAL layer (100-200ms decisions).
-	For STRATEGIC layer (2-5s cooldown planning), see Strategic.lua.
+	Single-layer tactical simulation (100-200ms decisions).
+	Cooldowns controlled via manual toggles (BurstEnabled/RecklessEnabled).
+	CD sync for racials handled via shouldWaitForDWSync() in GetValidActions().
 
 	MAIN ENTRY POINT:
 	Engine.GetRecommendation() → abilityName, isOffGCD, pooling, time, targetGUID, targetStance
@@ -1158,6 +1159,41 @@ function Engine.ApplyRend(state, targetId)
 end
 
 ---------------------------------------
+-- Process Sweeping Strikes charge consumption
+-- Duplicates damage to secondary target when SS is active
+-- Returns additional damage dealt
+---------------------------------------
+function Engine.ProcessSweepingStrikes(state, primaryDamage, abilityName)
+	-- Check if SS is active with charges
+	if not state.sweepingCharges or state.sweepingCharges <= 0 then
+		return 0
+	end
+
+	-- Need 2+ enemies in melee range for secondary target
+	local meleeTargets = state.enemyCountMelee or 1
+	if meleeTargets < 2 then
+		return 0
+	end
+
+	-- Sweeping Strikes duplicates the damage to secondary target
+	local ssDamage = primaryDamage
+
+	-- Consume one charge
+	state.sweepingCharges = state.sweepingCharges - 1
+
+	-- Deactivate SS buff if no charges left
+	if state.sweepingCharges <= 0 then
+		state.hasSweepingStrikes = false
+	end
+
+	-- Track SS damage
+	state.ssDamage = (state.ssDamage or 0) + ssDamage
+	state.totalDamage = (state.totalDamage or 0) + ssDamage
+
+	return ssDamage
+end
+
+---------------------------------------
 -- Process auto-attack (MH or OH) - Zebouski style
 -- Handles HS/Cleave queue, rage generation, and procs
 ---------------------------------------
@@ -1222,6 +1258,16 @@ function Engine.ProcessAutoAttack(state, isOH)
 	-- Consume Flurry charge on any swing
 	if state.flurryCharges > 0 then
 		state.flurryCharges = state.flurryCharges - 1
+	end
+
+	-- Sweeping Strikes: duplicate hit to secondary target (MH only, not Cleave)
+	if not isOH and state.swingQueued ~= "cleave" then
+		local abilityName = isSpell and "HS" or "Auto"
+		local ssDamage = Engine.ProcessSweepingStrikes(state, finalDamage, abilityName)
+		if ssDamage > 0 then
+			state.autoDamage = state.autoDamage + ssDamage
+			finalDamage = finalDamage + ssDamage
+		end
 	end
 
 	state.autoDamage = state.autoDamage + finalDamage
@@ -1678,9 +1724,9 @@ end
 
 ---------------------------------------
 -- DECISION SIMULATOR
--- Two-layer architecture:
--- 1. Strategic Layer (ATW.Strategic) - Long-term cooldown planning
--- 2. Tactical Layer (here) - Short-term ability decisions
+-- Single-layer tactical simulation with manual cooldown toggles
+-- Cooldowns controlled via BurstEnabled/RecklessEnabled/SyncCooldowns
+-- See Documentation/Toggles.md for details
 ---------------------------------------
 
 -- Configuration
@@ -2537,12 +2583,39 @@ function Engine.GetValidActions(state)
 	---------------------------------------
 	-- RACIAL ABILITIES (TurtleWoW)
 	-- Controlled by Burst toggle
+	-- CD Sync: If enabled, racials wait for Death Wish
 	---------------------------------------
+
+	-- Helper: check if we should wait for Death Wish sync
+	local function shouldWaitForDWSync()
+		-- Check if sync is enabled
+		local syncEnabled = AutoTurtleWarrior_Config.SyncCooldowns
+		if syncEnabled == nil then syncEnabled = true end  -- Default to enabled
+		if not syncEnabled then return false end
+
+		-- Only sync if we have Death Wish
+		if not ATW.Has or not ATW.Has.DeathWish then return false end
+
+		-- Check Death Wish cooldown
+		local dwCD = state.cooldowns and state.cooldowns.DeathWish or 999999
+
+		-- If DW is ready (CD <= 0), no need to wait - use together!
+		if dwCD <= 0 then return false end
+
+		-- If DW is coming soon (< 10s), wait for sync
+		if dwCD > 0 and dwCD <= 10000 then
+			return true
+		end
+
+		return false
+	end
+
+	local waitingForDW = shouldWaitForDWSync()
 
 	-- Blood Fury (Orc): +AP = level*2, OFF-GCD, 2min CD
 	if ATW.IsCooldownAllowed("BloodFury") and ATW.Racials and ATW.Racials.HasBloodFury then
 		local bfReady = (state.cooldowns.BloodFury or 0) <= 0
-		if bfReady and not state.hasBloodFury then
+		if bfReady and not state.hasBloodFury and not waitingForDW then
 			-- Blood Fury is off-GCD in TurtleWoW, usable in any stance
 			table.insert(actions, {name = "BloodFury", stance = stance, rage = 0, needsDance = false, offGCD = true})
 		end
@@ -2552,7 +2625,7 @@ function Engine.GetValidActions(state)
 	if ATW.IsCooldownAllowed("Berserking") and ATW.Racials and ATW.Racials.HasBerserking then
 		local berserkReady = (state.cooldowns.Berserking or 0) <= 0
 		local berserkCost = 5
-		if berserkReady and not state.hasBerserking and rage >= berserkCost then
+		if berserkReady and not state.hasBerserking and rage >= berserkCost and not waitingForDW then
 			table.insert(actions, {name = "Berserking", stance = stance, rage = berserkCost, needsDance = false, offGCD = false})
 		end
 	end
@@ -2560,7 +2633,7 @@ function Engine.GetValidActions(state)
 	-- Perception (Human): +2% crit for 20s, OFF-GCD, 3min CD
 	if ATW.IsCooldownAllowed("Perception") and ATW.Racials and ATW.Racials.HasPerception then
 		local percReady = (state.cooldowns.Perception or 0) <= 0
-		if percReady and not state.hasPerception then
+		if percReady and not state.hasPerception and not waitingForDW then
 			table.insert(actions, {name = "Perception", stance = stance, rage = 0, needsDance = false, offGCD = true})
 		end
 	end
@@ -2900,6 +2973,23 @@ function Engine.GetActionDamage(state, action)
 		dmgMod = dmgMod * 0.90
 	end
 
+	-- Sweeping Strikes: add SS damage bonus for single-target melee abilities
+	-- (Cleave and WW already handle multi-target, Rend doesn't trigger SS)
+	if damage > 0 and state.sweepingCharges and state.sweepingCharges > 0 then
+		local ssAbilities = {
+			Bloodthirst = true,
+			MortalStrike = true,
+			Overpower = true,
+			Execute = true,
+			Slam = true,
+			HeroicStrike = true,
+		}
+		if ssAbilities[action.name] and (state.enemyCountMelee or 1) >= 2 then
+			-- SS duplicates damage to secondary target
+			damage = damage * 2
+		end
+	end
+
 	return damage * dmgMod
 end
 
@@ -3060,6 +3150,24 @@ function Engine.ApplyAction(state, action)
 		-- Crit bonus applied through GetCritChance()
 	end
 
+	-- Consume Sweeping Strikes charge for melee abilities (not WW/Cleave/Rend)
+	if newState.sweepingCharges and newState.sweepingCharges > 0 then
+		local ssAbilities = {
+			Bloodthirst = true,
+			MortalStrike = true,
+			Overpower = true,
+			Execute = true,
+			Slam = true,
+			HeroicStrike = true,
+		}
+		if ssAbilities[action.name] and (newState.enemyCountMelee or 1) >= 2 then
+			newState.sweepingCharges = newState.sweepingCharges - 1
+			if newState.sweepingCharges <= 0 then
+				newState.hasSweepingStrikes = false
+			end
+		end
+	end
+
 	-- Advance time (except for off-GCD abilities)
 	if not action.offGCD then
 		newState.time = (newState.time or 0) + gcd
@@ -3180,10 +3288,11 @@ function Engine.SimulateDecisionHorizon(state, firstAction, horizon)
 end
 
 ---------------------------------------
--- Main decision function: Two-layer architecture
--- 1. Check Strategic layer for priority cooldowns
--- 2. Use Tactical simulation for rotation abilities
--- 3. Use caching to avoid redundant calculations
+-- Main decision function: Single-layer tactical simulation
+-- 1. Check for interrupt priority
+-- 2. Use cached result if state unchanged
+-- 3. Simulate all valid actions over 9s horizon
+-- 4. Pick highest damage action
 ---------------------------------------
 function Engine.GetBestAction()
 	local state = Engine.CaptureCurrentState()
@@ -3223,49 +3332,9 @@ function Engine.GetBestAction()
 	end
 
 	---------------------------------------
-	-- STRATEGIC LAYER: Check for priority cooldowns
-	-- These override tactical decisions when the plan says to use them NOW
-	---------------------------------------
-	local strategicAction = nil
-
-	if ATW.Strategic then
-		local priorityCD, priority = ATW.Strategic.GetPriorityCooldown(state)
-
-		if priorityCD and priority >= 70 then  -- High priority threshold
-			-- Find this cooldown in valid actions
-			local actions = Engine.GetValidActions(state)
-			for _, action in ipairs(actions) do
-				if action.name == priorityCD then
-					strategicAction = action
-					strategicAction.strategicPriority = priority
-					strategicAction.strategicReason = "Strategic plan"
-					break
-				end
-			end
-
-			-- If cooldown is ready but not in actions, create action for it
-			if not strategicAction then
-				local ability = ATW.Abilities and ATW.Abilities[priorityCD]
-				if ability then
-					local cd = state.cooldowns and state.cooldowns[priorityCD] or 999999
-					if cd <= 0 then
-						strategicAction = {
-							name = priorityCD,
-							stance = state.stance,
-							rage = ability.rage or 0,
-							needsDance = false,
-							offGCD = not ability.gcd,
-							strategicPriority = priority,
-							strategicReason = "Strategic plan",
-						}
-					end
-				end
-			end
-		end
-	end
-
-	---------------------------------------
 	-- TACTICAL LAYER: Simulate valid actions
+	-- Cooldowns are controlled via manual toggles (BurstEnabled/RecklessEnabled)
+	-- CD sync handled in GetValidActions via shouldWaitForDWSync()
 	---------------------------------------
 	local actions = Engine.GetValidActions(state)
 	local horizon = Engine.TACTICAL_HORIZON
@@ -3290,23 +3359,6 @@ function Engine.GetBestAction()
 			bestDamage = totalDamage
 			bestAction = action
 		end
-	end
-
-	---------------------------------------
-	-- DECISION: Strategic overrides Tactical for high-priority cooldowns
-	-- But only if they're worth using (not negative DPS)
-	---------------------------------------
-	if strategicAction then
-		-- Strategic cooldowns are always worth using when planned
-		-- They've already been evaluated at the strategic level
-		bestAction = strategicAction
-		-- Add to results for debugging
-		table.insert(results, {
-			name = strategicAction.name,
-			damage = bestDamage + 1000,  -- Artificial boost to show it was chosen
-			needsDance = strategicAction.needsDance,
-			strategic = true,
-		})
 	end
 
 	---------------------------------------

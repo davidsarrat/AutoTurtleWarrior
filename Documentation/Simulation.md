@@ -1,24 +1,10 @@
 # Simulation Engine
 
-Two-layer architecture: **Strategic Planning** + **Tactical Simulation**. No hardcoded priorities.
+Single-layer **Tactical Simulation** with manual cooldown toggles. No hardcoded priorities.
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  STRATEGIC LAYER (Sim/Strategic.lua)                        │
-│  ─────────────────────────────────────────────────────────  │
-│  Runs: Every 2-5 seconds                                    │
-│  Purpose: Long-term cooldown planning                       │
-│                                                             │
-│  Decisions:                                                 │
-│  - When to use Death Wish, Recklessness, racials           │
-│  - Cooldown synergy (stack Blood Fury + Death Wish)        │
-│  - Save Recklessness for execute phase?                    │
-│  - Rend spreading vs Cleave pure strategy                  │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  TACTICAL LAYER (Sim/Engine.lua)                            │
 │  ─────────────────────────────────────────────────────────  │
@@ -30,6 +16,7 @@ Two-layer architecture: **Strategic Planning** + **Tactical Simulation**. No har
 │  - Execute priority in execute phase                        │
 │  - Overpower on dodge procs                                │
 │  - Rend application on specific targets                    │
+│  - Sweeping Strikes charge consumption                     │
 └─────────────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -42,27 +29,43 @@ Two-layer architecture: **Strategic Planning** + **Tactical Simulation**. No har
 │  - Minimum 100ms between full simulations                  │
 │  - Invalidate on: rage change, stance change, CD ready     │
 └─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  TOGGLE SYSTEM (Manual Cooldown Control)                    │
+│  ─────────────────────────────────────────────────────────  │
+│  Purpose: Player controls when cooldowns are available      │
+│                                                             │
+│  - /atw burst [on|off]  - Death Wish + Racials             │
+│  - /atw reck [on|off]   - Recklessness                     │
+│  - /atw sync [on|off]   - Racials wait for Death Wish      │
+│  - /atw aoemode [on|off] - AoE vs single target            │
+│  - /atw rendspread [on|off] - Rend spreading               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Strategic Layer
+## Cooldown Synergy
 
-### File: `Sim/Strategic.lua`
-
-Plans long-term cooldown usage:
+When `SyncCooldowns = true`, racials wait up to 10 seconds for Death Wish to come off cooldown before being used. This is handled directly in `GetValidActions()`:
 
 ```lua
-Strategic.GetPlan(state)
-    └── Strategic.CreatePlan()
-            ├── EstimateTimeToExecute()   -- When will boss hit 20%?
-            ├── PlanCooldowns()           -- When to use each CD
-            │   ├── Recklessness: Save for execute or use now?
-            │   ├── Death Wish: Use on cooldown
-            │   ├── Blood Fury: Sync with Death Wish?
-            │   └── Berserking: Sync with Death Wish?
-            └── DetermineAoEStrategy()    -- Rend spread vs Cleave
-```
+-- In GetValidActions()
+local function shouldWaitForDWSync()
+    if not SyncCooldowns then return false end
+    if not ATW.Has.DeathWish then return false end
 
-### Cooldown Synergy
+    local dwCD = state.cooldowns.DeathWish or 999999
+    if dwCD <= 0 then return false end  -- DW ready, no wait
+    if dwCD <= 10000 then return true end  -- DW coming soon, wait!
+
+    return false
+end
+
+-- Applied to Blood Fury, Berserking, Perception
+if ATW.Has.BloodFury and cooldowns.BloodFury <= 0 and not waitingForDW then
+    table.insert(actions, {name = "BloodFury", ...})
+end
+```
 
 Death Wish + racials are **multiplicative**, not additive:
 
@@ -74,17 +77,6 @@ Berserking: +10% haste (more attacks)
 Together = much more than separately!
 ```
 
-### Execute Phase Planning
-
-```lua
-if timeToExecute < 45000 then  -- Execute in < 45s
-    -- SAVE Recklessness for 100% crit Executes
-    plan.cooldowns.Recklessness = { action = "save", useAt = "execute_phase" }
-else
-    -- Execute far away, consider using for uptime
-end
-```
-
 ## Tactical Layer
 
 ### File: `Sim/Engine.lua`
@@ -93,9 +85,9 @@ end
 Engine.GetRecommendation()
     └── Engine.GetBestAction()
             ├── Check cache (skip if state unchanged)
-            ├── Strategic.GetPriorityCooldown()  -- Strategic override?
             ├── Engine.CaptureCurrentState()     -- Snapshot game state
-            ├── Engine.GetValidActions()         -- All valid abilities
+            ├── Engine.GetValidActions()         -- Only LEARNED spells + toggle checks
+            │   └── CD sync: racials wait for DW if SyncCooldowns enabled
             └── Engine.SimulateDecisionHorizon() -- 9s lookahead (6 GCDs)
 ```
 
@@ -527,7 +519,7 @@ This is the **Zebouski approach**: no arbitrary rules, just damage comparison.
 
 ## Cooldown Toggle System
 
-Cooldowns are controlled by toggles (see `docs/Toggles.md` for full details):
+Cooldowns are controlled by toggles (see `Documentation/Toggles.md` for full details):
 
 ```lua
 -- Config toggles
@@ -548,8 +540,7 @@ end
 
 **Integration points:**
 1. `Engine.GetValidActions()` - Excludes disabled CDs from action list
-2. `Strategic.GetPriorityCooldown()` - Respects toggles
-3. `SimulateTimeWindow()` - Excludes disabled CDs from 30s simulation
+2. `shouldWaitForDWSync()` - Delays racials when DW coming soon (if SyncCooldowns enabled)
 
 ## Multi-Target Mechanics
 
@@ -614,30 +605,13 @@ The simulation **naturally handles all edge cases** because it calculates actual
 ## Debug Commands
 
 ```
-/atw plan       - Show strategic cooldown plan (DW, Reck, racials)
 /atw decision   - Show tactical decision comparison (all actions + damage)
 /atw cache      - Show cache statistics (hit rate, update frequency)
 /atw aoe        - Show AoE strategy analysis (Rend vs Cleave)
 /atw sim        - Simulate next 5 abilities
 /atw rend       - Show Rend decision info
 /atw spells     - Show which abilities are detected as learned
-```
-
-### Example Output: /atw plan
-
-```
-=== Strategic Plan ===
-Phase: normal
-Time to Execute: 45.2s
-AoE Strategy: rend_spread
-
-Cooldown Plan:
-  DeathWish: use_now (P80)
-    -> Sync with BloodFury
-  BloodFury: use_now (P75)
-    -> Sync with Death Wish
-  Recklessness: save
-    -> Execute phase in 45s
+/atw cd         - Show cooldown status and toggle states
 ```
 
 ### Example Output: /atw decision
@@ -680,12 +654,24 @@ Last update: 45ms ago
 
 ## Configuration
 
-The only settings that affect simulation:
+Settings that affect simulation behavior:
 
 ```lua
 AutoTurtleWarrior_Config = {
-    DanceRage = 10,     -- Min rage to consider stance dancing
+    DanceRage = 10,         -- Min rage to consider stance dancing
+
+    -- Cooldown Toggles (see Documentation/Toggles.md)
+    BurstEnabled = true,    -- Death Wish + Racials
+    RecklessEnabled = false, -- Recklessness
+    SyncCooldowns = true,   -- Racials wait for Death Wish
+
+    -- AoE Toggles
+    AoEEnabled = true,      -- Auto AoE based on enemy count
+    RendSpread = true,      -- Spread Rend to multiple targets
 }
 ```
 
-Note: HS/Cleave have **no rage threshold** - the simulation determines optimal usage by comparing damage scenarios over the 9-second horizon.
+**Notes:**
+- HS/Cleave have **no rage threshold** - the simulation determines optimal usage by comparing damage scenarios over the 9-second horizon.
+- When `AoEEnabled = false`, Rend spreading is automatically disabled (single target funnel mode).
+- When `SyncCooldowns = true`, racials wait up to 10s for Death Wish before being used.

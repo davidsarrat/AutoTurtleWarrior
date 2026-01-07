@@ -81,11 +81,14 @@ end
 
 ## Range Constants
 
-| Range | Use | Abilities |
-|-------|-----|-----------|
-| 5 yards | Melee range | Rend, Heroic Strike, Execute |
-| 8 yards | Whirlwind | WW, Cleave |
-| 25 yards | Charge range | Charge |
+| Range | Use | Abilities | Max Targets |
+|-------|-----|-----------|-------------|
+| 5 yards | Melee range | Rend, Heroic Strike, Execute, Cleave, Sweeping Strikes | Cleave: 2, SS: 1 secondary |
+| 8 yards | Whirlwind | Whirlwind only | WW: 4 |
+| 8-25 yards | Charge range | Charge | - |
+
+**Important:** Cleave is **NOT** 8 yards - it's a melee range (5yd) ability that hits up to 2 targets.
+Whirlwind is the only warrior AoE with 8 yard range.
 
 ### Convenience Functions
 
@@ -187,25 +190,39 @@ end
 ### Configuration Options
 
 ```lua
-AutoTurtleWarrior_Config.AoE = "auto"  -- "on", "off", or "auto"
-AutoTurtleWarrior_Config.AoECount = 3  -- Threshold for auto mode
-AutoTurtleWarrior_Config.WWRange = 8   -- Detection range
+AutoTurtleWarrior_Config = {
+    AoEEnabled = true,   -- true = auto AoE, false = single target
+    RendSpread = true,   -- Spread Rend to multiple targets
+}
+```
+
+**Note:** When `AoEEnabled = false`, `RendSpread` is automatically disabled (single target funnel mode).
+
+### Slash Commands
+
+```
+/atw aoemode        - Toggle AoE mode
+/atw aoemode on     - Enable auto AoE
+/atw aoemode off    - Single target mode
+
+/atw rendspread     - Toggle Rend spreading
+/atw rendspread on  - Spread Rend to multiple targets
+/atw rendspread off - Rend main target only
 ```
 
 ### Mode Logic
 
 ```lua
-function ATW.InAoE()
-    local mode = AutoTurtleWarrior_Config.AoE
+-- In Engine.CaptureCurrentState()
+local aoeEnabled = AutoTurtleWarrior_Config.AoEEnabled
+if aoeEnabled == nil then aoeEnabled = true end
 
-    if mode == "on" then
-        return true
-    elseif mode == "off" then
-        return false
-    end
+local rendSpreadEnabled = AutoTurtleWarrior_Config.RendSpread
+if rendSpreadEnabled == nil then rendSpreadEnabled = true end
 
-    -- Auto mode: check enemy count
-    return ATW.EnemyCount() >= AutoTurtleWarrior_Config.AoECount
+-- AoE OFF implies Rend Spread OFF (single target funnel mode)
+if not aoeEnabled then
+    rendSpreadEnabled = false
 end
 ```
 
@@ -299,38 +316,94 @@ Enemies (with Rend tracking):
   7.2yd | HP: 90% | TTD: 25s [Beast]
 ```
 
-## Integration with Rotation
+## Sweeping Strikes Simulation
 
-### Priority Decisions
+Sweeping Strikes provides 5 charges that duplicate melee damage to a secondary target. The simulation properly tracks and consumes these charges.
+
+### How SS Works
+
+- **Charges**: 5 charges per activation
+- **Range**: Melee (5 yards) - requires 2+ enemies in melee range
+- **Duration**: 20 seconds or until charges consumed
+- **Damage**: Duplicates the full damage of the attack to secondary target
+
+### Abilities That Trigger SS
+
+The following abilities consume SS charges in the simulation:
+
+| Ability | Triggers SS? | Notes |
+|---------|-------------|-------|
+| Auto-attack (MH) | Yes | Only if NOT queueing Cleave |
+| Heroic Strike | Yes | Replaces auto, triggers SS |
+| Cleave | No | Already multi-target |
+| Bloodthirst | Yes | Melee ability |
+| Mortal Strike | Yes | Melee ability |
+| Overpower | Yes | Melee ability |
+| Execute | Yes | Melee ability |
+| Slam | Yes | Melee ability |
+| Whirlwind | No | Already multi-target |
+| Rend | No | DoT, not direct damage |
+
+### Simulation Implementation
 
 ```lua
--- In Rotation.lua
-local enemies = ATW.EnemyCount(8)
-
-if enemies >= 3 then
-    -- Consider Whirlwind/Cleave priority
-    if ATW.Ready("Whirlwind") and rage >= 25 then
-        -- WW is high priority in AoE
+-- In Engine.lua
+function Engine.ProcessSweepingStrikes(state, primaryDamage, abilityName)
+    -- Check if SS is active with charges
+    if not state.sweepingCharges or state.sweepingCharges <= 0 then
+        return 0
     end
-end
 
-if enemies >= 2 then
-    -- Consider Sweeping Strikes
-    if ATW.Talents.HasSS and ATW.Ready("Sweeping Strikes") then
-        -- SS before big hits
+    -- Need 2+ enemies in melee range for secondary target
+    local meleeTargets = state.enemyCountMelee or 1
+    if meleeTargets < 2 then
+        return 0
     end
+
+    -- Duplicate damage to secondary target
+    local ssDamage = primaryDamage
+
+    -- Consume one charge
+    state.sweepingCharges = state.sweepingCharges - 1
+
+    -- Deactivate buff if no charges left
+    if state.sweepingCharges <= 0 then
+        state.hasSweepingStrikes = false
+    end
+
+    return ssDamage
 end
 ```
+
+### State Tracking
+
+```lua
+state = {
+    hasSweepingStrikes = true,   -- Buff active?
+    sweepingCharges = 5,         -- Charges remaining (0-5)
+    enemyCountMelee = 2,         -- Enemies in melee range
+}
+```
+
+## Integration with Rotation
 
 ### Cleave vs Heroic Strike
 
 ```lua
--- When rage dumping
-if ATW.InAoE() and rage >= 20 then
-    return "Cleave"
+-- Simulation decides based on damage comparison:
+-- - Cleave: weapon damage + bonus to 2 targets (5yd)
+-- - HS + SS: weapon damage + HS bonus + SS duplicate (if 2+ enemies)
+
+-- When no SS active and 2+ enemies:
+if enemies >= 2 then
+    return "Cleave"  -- Always better for multi-target
 else
     return "HeroicStrike"
 end
+
+-- When SS active and 2+ enemies:
+-- HS triggers SS for equivalent multi-target damage
+-- Simulation compares total damage scenarios
 ```
 
 ## Distance Calculation

@@ -347,6 +347,32 @@ function ATW.HandleCommand(msg)
 			ATW.Print("Usage: /atw pummel [on|off]")
 		end
 
+	elseif cmd == "sync" or cmd == "cdsync" then
+		-- Toggle CD sync (racials wait for Death Wish)
+		if AutoTurtleWarrior_Config.SyncCooldowns == nil then
+			AutoTurtleWarrior_Config.SyncCooldowns = ATW.DEFAULT.SyncCooldowns
+		end
+		AutoTurtleWarrior_Config.SyncCooldowns = not AutoTurtleWarrior_Config.SyncCooldowns
+		if AutoTurtleWarrior_Config.SyncCooldowns then
+			ATW.Print("CD Sync: |cff00ff00ON|r (racials wait for Death Wish)")
+		else
+			ATW.Print("CD Sync: |cffff9900OFF|r (use cooldowns independently)")
+		end
+
+	elseif strfind(cmd, "^sync%s+") or strfind(cmd, "^cdsync%s+") then
+		-- /atw sync on|off
+		local _, _, arg = strfind(cmd, "^%S+%s+(.+)")
+		arg = strlower(arg or "")
+		if arg == "on" then
+			AutoTurtleWarrior_Config.SyncCooldowns = true
+			ATW.Print("CD Sync: |cff00ff00ON|r (racials wait for Death Wish)")
+		elseif arg == "off" then
+			AutoTurtleWarrior_Config.SyncCooldowns = false
+			ATW.Print("CD Sync: |cffff9900OFF|r (use cooldowns independently)")
+		else
+			ATW.Print("Usage: /atw sync [on|off]")
+		end
+
 	elseif cmd == "aoemode" or cmd == "aoetoggle" then
 		-- Toggle AoE mode (auto vs single target)
 		if AutoTurtleWarrior_Config.AoEEnabled == nil then
@@ -623,14 +649,6 @@ function ATW.HandleCommand(msg)
 			end
 		end
 
-	elseif cmd == "strategic" or cmd == "plan" then
-		-- Show strategic cooldown plan
-		if ATW.Strategic and ATW.Strategic.PrintPlan then
-			ATW.Strategic.PrintPlan()
-		else
-			ATW.Print("Strategic planner not loaded")
-		end
-
 	elseif strfind(cmd, "^spellid%s+") or strfind(cmd, "^spell%s+") then
 		-- Debug: show spell ID and cooldown info for a spell
 		local _, _, spellName = strfind(cmd, "^spell[id]*%s+(.+)")
@@ -757,11 +775,11 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw burst [on|off] - Toggle DW + Racials")
 		ATW.Print("  /atw reck [on|off] - Toggle Recklessness")
 		ATW.Print("  /atw sustain - Disable all CDs")
+		ATW.Print("  /atw sync [on|off] - Racials wait for DW")
 		ATW.Print("  /atw pummel [on|off] - Auto-interrupt")
 		ATW.Print("  /atw aoemode [on|off] - AoE/single target")
 		ATW.Print("  /atw rendspread [on|off] - Rend spreading")
-		ATW.Print("--- Simulation & Strategy ---")
-		ATW.Print("  /atw plan - Strategic cooldown plan")
+		ATW.Print("--- Simulation ---")
 		ATW.Print("  /atw decision - Debug tactical decisions")
 		ATW.Print("  /atw cache - Show cache statistics")
 		ATW.Print("  /atw sim - Simulate next 5 abilities")
