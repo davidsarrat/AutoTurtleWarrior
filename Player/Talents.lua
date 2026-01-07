@@ -5,6 +5,29 @@
 
 	Spell data source: Zebouski/WarriorSim-TurtleWoW
 	https://github.com/Zebouski/WarriorSim-TurtleWoW
+
+	FILE STRUCTURE:
+	===============
+	1. SPELL DATA TABLES (line ~15)
+	   - RendData, ExecuteData, HeroicStrikeData, etc.
+	   - Base values by rank for damage calculations
+
+	2. SPELL LOOKUP FUNCTIONS (line ~125)
+	   - GetMaxSpellRank(), HasSpell()
+	   - Get damage values: GetRendDamage(), GetExecuteBase(), etc.
+
+	3. LOADING FUNCTIONS (line ~325)
+	   - LoadSpells() - Detect learned spells and ranks
+	   - LoadTalents() - Read talent points from API
+
+	4. RACIAL DATA & FUNCTIONS (line ~520)
+	   - RacialData table with TurtleWoW values
+	   - LoadRacials(), IsRacialReady()
+	   - Blood Fury, Berserking, Perception support
+
+	5. ATW.Has CACHE (line ~672)
+	   - LoadAvailableAbilities() - Caches all ability availability
+	   - Engine uses ATW.Has.AbilityName for fast lookups
 ]]--
 
 ---------------------------------------

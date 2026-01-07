@@ -36,8 +36,12 @@ The addon uses a **100% simulation-based approach** (Zebouski-style) with **no h
 
 1. **Capture State** - Snapshot full combat state (all enemies, buffs, cooldowns, combat state)
 2. **Generate Actions** - List all valid actions using `hasSpell()` checks (only learned spells!)
-3. **Simulate Each** - For each action, simulate 60 seconds (1 minute) of combat
+3. **Simulate Each** - For each action, simulate **9 seconds** (6 GCDs) tactical horizon
 4. **Compare Damage** - Pick the action that yields highest total damage
+
+**Two-Layer Architecture:**
+- **Strategic Layer** (every 2-5s): Plans cooldown usage, Rend spread vs Cleave strategy (30s lookahead)
+- **Tactical Layer** (every frame): Decides immediate ability (9s lookahead)
 
 This approach automatically handles edge cases like:
 - Charge availability (out of combat only)
@@ -45,6 +49,7 @@ This approach automatically handles edge cases like:
 - Execute target dying to DoTs
 - Multi-target Rend optimization
 - Dynamic HS/Cleave thresholds
+- Cooldown synergy (Death Wish + racials stacking)
 
 ### Intelligent Rotation
 
@@ -86,47 +91,68 @@ This approach automatically handles edge cases like:
 ```
 AutoTurtleWarrior/
 ├── Core/
-│   ├── Init.lua          - Addon initialization, defaults
-│   └── Helpers.lua       - Utility functions (buffs, debuffs)
+│   ├── Init.lua          - Addon initialization, defaults, config
+│   └── Helpers.lua       - Utility functions (buffs, debuffs, cooldowns)
 ├── Player/
-│   ├── Talents.lua       - Talent & spell detection
-│   ├── Stats.lua         - Player statistics
-│   ├── Gear.lua          - Weapon detection
-│   └── TTD.lua           - Time To Die tracking
-├── Detection/
-│   ├── AoE.lua           - Enemy counting & Rend tracking
-│   ├── Distance.lua      - Range calculations
-│   └── CreatureType.lua  - Bleed immunity detection
+│   ├── Stats.lua         - Player statistics (AP, crit, etc.)
+│   ├── TTD.lua           - Time To Die tracking (linear regression)
+│   ├── Gear.lua          - Weapon detection (MH/OH speeds, damage)
+│   └── Talents.lua       - Talent, spell rank, and racial detection
 ├── Combat/
-│   ├── Stance.lua        - Stance management
-│   ├── Casting.lua       - Spell casting helpers
-│   ├── SwingTimer.lua    - Swing timer tracking
-│   └── GUIDTargeting.lua - GUID-based spell casting
+│   ├── Stance.lua        - Stance detection and switching
+│   ├── Casting.lua       - Spell casting helpers (Cast, CastSelf)
+│   ├── SwingTimer.lua    - Swing timer + UNIT_CASTEVENT routing
+│   ├── GUIDTargeting.lua - GUID-based spell casting (nameplates)
+│   └── Interrupt.lua     - CastingTracker + auto-Pummel system
+├── Detection/
+│   ├── Distance.lua      - Range calculations (SuperWoW)
+│   ├── CreatureType.lua  - Bleed immunity detection
+│   └── AoE.lua           - Enemy counting, Rend tracking per GUID
 ├── Sim/
-│   ├── Engine.lua        - Combat simulation engine
-│   ├── Abilities.lua     - Ability definitions
-│   ├── RageModel.lua     - Rage formulas
-│   └── Simulator.lua     - Time-based simulation
+│   ├── Abilities.lua     - Ability definitions and damage formulas
+│   ├── RageModel.lua     - Rage generation formulas (Zebouski)
+│   ├── Strategic.lua     - Long-term cooldown planning (30s)
+│   ├── Engine.lua        - Combat simulation engine (9s tactical)
+│   └── Simulator.lua     - Time-window sim, cooldown toggles
 ├── Rotation/
-│   └── Rotation.lua      - Main rotation logic
-├── Commands/
-│   ├── SlashCommands.lua - Chat commands
-│   └── Events.lua        - Event handling
+│   └── Rotation.lua      - Main rotation execution logic
 ├── UI/
-│   └── Display.lua       - Visual display
-└── docs/                 - This documentation
+│   └── Display.lua       - Visual display frame
+├── Commands/
+│   ├── SlashCommands.lua - Chat commands (/atw)
+│   └── Events.lua        - Event registration and handling
+└── docs/
+    ├── README.md         - This file
+    ├── Architecture.md   - Code structure overview
+    ├── Simulation.md     - Simulation engine details
+    ├── Toggles.md        - Cooldown toggle system
+    ├── Interrupt.md      - Auto-interrupt system
+    ├── Rend.md           - Rend tracking system
+    ├── TTD.md            - Time To Die algorithm
+    ├── Spells.md         - Spell rank detection
+    ├── AoE.md            - AoE detection
+    ├── Detection.md      - SuperWoW/UnitXP detection
+    └── SwingTimer.md     - Swing timer tracking
 ```
 
 ## How The Simulation Works
 
 ```
 GetBestAction()
-    └── CaptureCurrentState()      -- Get full combat snapshot
-            └── GetValidActions()  -- List valid actions (hasSpell checks!)
-                    └── For each action:
-                            SimulateDecisionHorizon()  -- Simulate 60s
-                                    └── Compare total damage
-                                            └── Return highest
+    ├── CacheValid?                    -- Skip if state unchanged (100ms min)
+    │   └── Return cached result
+    │
+    ├── Strategic.GetPriorityCooldown() -- Check strategic layer
+    │   └── High priority CD? → Use it (override tactical)
+    │
+    └── Tactical Simulation
+        ├── CaptureCurrentState()      -- Full combat snapshot
+        ├── GetValidActions()          -- Only LEARNED spells
+        └── For each action:
+                SimulateDecisionHorizon()  -- Simulate 9s (6 GCDs)
+                        └── Greedy best action for remaining time
+                                └── Sum total damage
+                                        └── Return highest
 ```
 
 The simulation handles complex mechanics automatically:
@@ -135,6 +161,8 @@ The simulation handles complex mechanics automatically:
 - **Bloodrage**: Sets `inCombat = true` (blocks Charge if used first)
 - **Battle Shout**: Does NOT trigger combat (can cast before Charge)
 - **HS/Cleave**: Dynamic threshold - drops when main abilities on cooldown
+- **Cooldowns**: Respects BurstEnabled/RecklessEnabled toggles
+- **Interrupts**: Pummel prioritized when PummelEnabled and enemy casting
 
 ## Contributing
 

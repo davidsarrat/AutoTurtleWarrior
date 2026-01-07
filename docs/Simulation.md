@@ -356,7 +356,7 @@ end
 
 ### 5. SimulateDecisionHorizon(state, firstAction, horizon)
 
-Simulates 60 seconds (1 minute) forward starting with `firstAction`:
+Simulates **9 seconds** (6 GCDs) forward starting with `firstAction`:
 
 ```lua
 function SimulateDecisionHorizon(state, firstAction, horizon)
@@ -392,7 +392,7 @@ function GetBestAction()
     local bestAction, bestDamage = nil, -1
 
     for _, action in ipairs(actions) do
-        local damage = SimulateDecisionHorizon(state, action, 60000)
+        local damage = SimulateDecisionHorizon(state, action, 9000)
         if damage > bestDamage then
             bestDamage = damage
             bestAction = action
@@ -519,11 +519,37 @@ end
 ```
 
 The simulation naturally handles the "save rage for BT" decision:
-- **Scenario A**: Use HS now → simulate 60s → total damage X
-- **Scenario B**: Wait → use BT → simulate 60s → total damage Y
+- **Scenario A**: Use HS now → simulate 9s → total damage X
+- **Scenario B**: Wait → use BT → simulate 9s → total damage Y
 - Pick whichever yields more damage
 
 This is the **Zebouski approach**: no arbitrary rules, just damage comparison.
+
+## Cooldown Toggle System
+
+Cooldowns are controlled by toggles (see `docs/Toggles.md` for full details):
+
+```lua
+-- Config toggles
+BurstEnabled = true,     -- Death Wish + Racials
+RecklessEnabled = false, -- Recklessness
+
+-- Check function
+function ATW.IsCooldownAllowed(cdName)
+    if ATW.BURST_COOLDOWNS[cdName] then
+        return AutoTurtleWarrior_Config.BurstEnabled == true
+    end
+    if ATW.RECKLESS_COOLDOWNS[cdName] then
+        return AutoTurtleWarrior_Config.RecklessEnabled == true
+    end
+    return true
+end
+```
+
+**Integration points:**
+1. `Engine.GetValidActions()` - Excludes disabled CDs from action list
+2. `Strategic.GetPriorityCooldown()` - Respects toggles
+3. `SimulateTimeWindow()` - Excludes disabled CDs from 30s simulation
 
 ## Multi-Target Mechanics
 
@@ -662,4 +688,4 @@ AutoTurtleWarrior_Config = {
 }
 ```
 
-Note: HS/Cleave have **no rage threshold** - the simulation determines optimal usage by comparing damage scenarios over the 60-second horizon.
+Note: HS/Cleave have **no rage threshold** - the simulation determines optimal usage by comparing damage scenarios over the 9-second horizon.

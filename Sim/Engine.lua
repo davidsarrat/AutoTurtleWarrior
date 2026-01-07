@@ -1,11 +1,27 @@
 --[[
 	Auto Turtle Warrior - Sim/Engine
-	Complete combat simulation engine
+	TACTICAL LAYER - Combat simulation engine (9 second horizon)
 	Based on Zebouski/WarriorSim-TurtleWoW patterns
 
-	Features:
+	ARCHITECTURE:
+	=============
+	This is the TACTICAL layer (100-200ms decisions).
+	For STRATEGIC layer (2-5s cooldown planning), see Strategic.lua.
+
+	MAIN ENTRY POINT:
+	Engine.GetRecommendation() → abilityName, isOffGCD, pooling, time, targetGUID, targetStance
+
+	CORE FUNCTIONS:
+	- CaptureCurrentState()      - Snapshot game state (line ~1700)
+	- GetValidActions()          - Generate valid actions (line ~2200)
+	- GetActionDamage()          - Calculate damage value (line ~2550)
+	- ApplyAction()              - Apply action effects (line ~2800)
+	- SimulateDecisionHorizon()  - 9s forward simulation (line ~3030)
+	- GetBestAction()            - Main decision function (line ~3095)
+
+	FEATURES:
 	- Time-step simulation (milliseconds precision)
-	- HP tracking per target with execute phase detection
+	- Multi-target support with per-enemy state
 	- Complete buff/aura system with durations
 	- Rage generation model (hits, Bloodrage, talents)
 	- Cooldown and GCD management
@@ -13,6 +29,10 @@
 	- Swing timer tracking with Flurry haste
 	- Deep Wounds DoT simulation
 	- Execute rage dump optimization
+	- Cooldown toggle integration (BurstEnabled/RecklessEnabled)
+	- Auto-interrupt state capture (PummelEnabled)
+
+	See docs/Simulation.md for detailed documentation.
 ]]--
 
 ATW.Engine = {}

@@ -128,7 +128,7 @@ The addon loads modules in a specific order defined in the `.toc` file:
         │                          │                          │
 ┌───────┴────────────┐     ┌───────┴───────────┐      ┌───────┴──────┐
 │ rage, stance, buffs│     │ Only LEARNED spells│      │ Sim each act │
-│ inCombat, distance │     │ Charge if OOC      │      │ 60s horizon  │
+│ inCombat, distance │     │ Charge if OOC      │      │ 9s horizon   │
 │ enemies[], TTD     │     │ Slam if 2H only    │      │ Pick highest │
 └────────────────────┘     └───────────────────┘      └──────────────┘
 ```
@@ -144,11 +144,18 @@ AutoTurtleWarrior_Config = {
     PrimaryStance = 0,      -- 0=auto, 3=Berserker
     DanceRage = 10,         -- Min rage to stance dance
     MaxRage = 60,           -- Rage cap consideration
-    -- Note: HSRage removed - simulation decides optimal HS/Cleave usage
     AoE = "auto",           -- "on", "off", "auto"
     AoECount = 3,           -- Enemies for auto AoE
     WWRange = 8,            -- Whirlwind range
-    UseCooldowns = true,    -- Use Death Wish, Recklessness
+
+    -- Cooldown Toggle System (see Toggles.md)
+    -- Priority: BurstEnabled + RecklessEnabled stack
+    -- Both OFF = sustain mode (no cooldowns)
+    BurstEnabled = true,    -- Death Wish + Racials (Blood Fury, Berserking, Perception)
+    RecklessEnabled = false, -- Recklessness (save for execute or manual)
+
+    -- Auto-Interrupt System (see Interrupt.md)
+    PummelEnabled = true,   -- Auto-interrupt with Pummel via CastingTracker
 }
 ```
 
@@ -163,17 +170,29 @@ ATW.State = {
 
     -- Combat Windows
     Overpower = nil,        -- Overpower window active (timestamp)
-    Interrupt = nil,        -- Enemy casting (pummel window)
+    Interrupt = nil,        -- Legacy interrupt flag (deprecated, use CastingTracker)
 
     -- Attack State
     Attacking = nil,        -- Currently auto-attacking
     NeedsAARestore = nil,   -- GUID to restore AA to after nameplate cast
-
-    -- Rend Tracking (pending verification)
-    PendingRendGUID = nil,  -- GUID of target we cast Rend on
-    PendingRendTime = nil,  -- When we cast it
-    PendingRendName = nil,  -- Target name for verification
 }
+```
+
+### CastingTracker System (Combat/Interrupt.lua)
+
+The addon tracks enemy casts via SuperWoW's UNIT_CASTEVENT:
+
+```lua
+ATW.CastingTracker = {
+    casts = {},             -- {[guid] = {spellID, startTime, duration}}
+}
+
+-- Key functions:
+ATW.CastingTracker.OnCastStart(guid, spellID, duration)  -- Track new cast
+ATW.CastingTracker.OnCastEnd(guid)                       -- Clear completed cast
+ATW.GetInterruptTarget()                                  -- Find closest casting enemy
+ATW.ShouldInterrupt()                                     -- Check if Pummel ready + target
+ATW.ExecuteInterrupt(guid)                                -- Target, Pummel, restore target
 ```
 
 ### AA Target Restore System

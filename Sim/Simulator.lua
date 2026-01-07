@@ -1,18 +1,29 @@
 --[[
 	Auto Turtle Warrior - Sim/Simulator
-	100% SIMULATION-BASED decision engine (Zebouski-style)
+	Support module for the simulation engine
 
-	Decision making is handled entirely by Engine.lua:
-	- CaptureCurrentState(): Gets current combat state (multi-target)
-	- GetValidActions(): Lists all possible actions from current state
-	- GetActionDamage(): Calculates expected damage for each action
-	- SimulateDecisionHorizon(): Simulates 6s forward with each first action
-	- GetBestAction(): Compares all actions, returns highest damage option
+	ARCHITECTURE:
+	=============
+	Main decision engine is in Engine.lua (tactical layer, 9s horizon).
+	This file contains:
 
-	NO HARDCODED PRIORITIES - everything is computed via simulation.
+	1. COOLDOWN TOGGLE SYSTEM (Active)
+	   - ATW.IsCooldownAllowed() - Check if CD enabled by toggles
+	   - ATW.BURST_COOLDOWNS, ATW.RECKLESS_COOLDOWNS - CD categories
+	   - ATW.SetBurst(), ATW.SetReckless(), ATW.SetSustain() - Toggle functions
 
-	Legacy DPR functions below are kept for compatibility but NOT USED
-	for decision making. See Engine.lua for the actual simulation logic.
+	2. TIME-WINDOW SIMULATION (Active)
+	   - ATW.SimulateTimeWindow() - 30s simulation for Rend spread comparison
+	   - ATW.FindOptimalStrategy() - Compare "normal" vs "rend_spread"
+	   - ATW.PrintStrategyComparison() - Debug output
+
+	3. LEGACY DPR FUNCTIONS (Deprecated)
+	   - ATW.CalculateDPR() - Old damage-per-rage calculation
+	   - ATW.GetSimStats() - Old stats gathering
+	   - These are kept for compatibility but NOT used for decisions
+
+	See docs/Toggles.md for cooldown toggle documentation.
+	See docs/Simulation.md for full simulation architecture.
 ]]--
 
 ATW.Sim = {
@@ -29,7 +40,9 @@ ATW.Sim = {
 }
 
 ---------------------------------------
--- Calculate DPR (Damage Per Rage)
+-- [LEGACY] Calculate DPR (Damage Per Rage)
+-- DEPRECATED: Used by GetPriorityList() fallback only.
+-- Main decisions now use Engine.GetActionDamage() with full simulation.
 ---------------------------------------
 function ATW.CalculateDPR(abilityName, stats, rage)
 	local ability = ATW.Abilities[abilityName]
@@ -65,7 +78,9 @@ function ATW.CalculateDPR(abilityName, stats, rage)
 end
 
 ---------------------------------------
--- Get current player stats for sim
+-- [LEGACY] Get current player stats for sim
+-- DEPRECATED: SimulateAhead/TimeWindow use actual API data.
+-- Kept for GetPriorityList() compatibility.
 ---------------------------------------
 function ATW.GetSimStats()
 	ATW.UpdateStats()
@@ -89,7 +104,8 @@ function ATW.GetSimStats()
 end
 
 ---------------------------------------
--- Check if ability is usable now
+-- [LEGACY] Check if ability is usable now
+-- DEPRECATED: Engine.GetValidActions() handles this with full state.
 ---------------------------------------
 function ATW.CanUseAbility(abilityName, rage, stance)
 	local ability = ATW.Abilities[abilityName]
@@ -155,7 +171,9 @@ function ATW.CanUseAbility(abilityName, rage, stance)
 end
 
 ---------------------------------------
--- Get priority-sorted ability list
+-- [LEGACY] Get priority-sorted ability list
+-- DEPRECATED: Not used for main decisions.
+-- Engine.SimulateDecisionHorizon() provides pure simulation-based decisions.
 -- Returns: { {name, dpr, needsDance, targetStance}, ... }
 ---------------------------------------
 function ATW.GetPriorityList()
@@ -651,7 +669,8 @@ function ATW.SimulateAhead(steps)
 end
 
 ---------------------------------------
--- Debug: Print priority list
+-- [LEGACY] Debug: Print priority list (DPR-based)
+-- Use /atw decision for simulation-based comparisons
 ---------------------------------------
 function ATW.PrintPriority()
 	local priorities = ATW.GetPriorityList()
@@ -676,7 +695,8 @@ function ATW.PrintPriority()
 end
 
 ---------------------------------------
--- Debug: Print simulation
+-- [LEGACY] Debug: Print simulation (uses fallback SimulateAhead)
+-- Use /atw decision for Engine simulation results
 ---------------------------------------
 function ATW.PrintSim()
 	local sim = ATW.SimulateAhead(5)
