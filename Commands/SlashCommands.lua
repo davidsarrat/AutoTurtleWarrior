@@ -464,6 +464,14 @@ function ATW.HandleCommand(msg)
 		local _, _, scale = strfind(cmd, "scale%s+([%d%.]+)")
 		ATW.SetDisplayScale(scale)
 
+	elseif cmd == "timeline" or cmd == "tl" then
+		-- Toggle timeline display
+		ATW.ToggleTimeline()
+
+	elseif cmd == "tlreset" then
+		-- Reset timeline position
+		ATW.ResetTimelinePosition()
+
 	elseif cmd == "hp" or cmd == "health" then
 		-- Debug HP detection
 		ATW.Print("--- HP Debug ---")
@@ -797,6 +805,8 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw toggle - Show/hide display")
 		ATW.Print("  /atw lock - Lock/unlock for moving")
 		ATW.Print("  /atw scale 1.5 - Set display scale")
+		ATW.Print("  /atw timeline - Show/hide ability timeline")
+		ATW.Print("  /atw tlreset - Reset timeline position")
 		ATW.Print("--- Toggles ---")
 		ATW.Print("  /atw cd - Show cooldown status")
 		ATW.Print("  /atw burst [on|off] - Toggle DW + Racials")

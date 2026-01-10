@@ -421,8 +421,10 @@ function ATW.GetNextAbility()
 		ATW.Debug("Pooling rage for Execute in " .. string.format("%.1f", timeToExecute or 0) .. "s")
 	end
 
-	-- Return action info - isStanceSwitch tells Rotation to use CastShapeshiftForm
-	return abilityName, isStanceSwitch, targetStance, targetGUID
+	-- Return action info
+	-- isStanceSwitch tells Rotation to use CastShapeshiftForm
+	-- isOffGCD tells Rotation to chain the next action after this one
+	return abilityName, isStanceSwitch, targetStance, targetGUID, isOffGCD
 end
 
 ---------------------------------------

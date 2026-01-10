@@ -77,6 +77,7 @@ EventFrame:SetScript("OnEvent", function()
 
 		-- Initialize UI
 		ATW.InitDisplay()
+		ATW.InitTimeline()
 
 		-- Show loaded message with stance info
 		local stanceName = ATW.StanceNames[AutoTurtleWarrior_Config.PrimaryStance] or "None"

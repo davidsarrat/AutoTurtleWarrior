@@ -17,7 +17,7 @@
 ATW.UI = {
 	frame = nil,
 	elements = {},
-	updateInterval = 0.05,  -- 50ms for smooth updates
+	updateInterval = 0.02,  -- 20ms for responsive feedback
 	lastUpdate = 0,
 	isLocked = true,
 
@@ -804,5 +804,519 @@ function ATW.InitDisplay()
 	local scale = AutoTurtleWarrior_Config.DisplayScale or 1
 	if ATW.UI.frame then
 		ATW.UI.frame:SetScale(scale)
+	end
+end
+
+--[[
+================================================================================
+  TIMELINE UI - Visual timeline showing abilities and auto-attacks
+
+  Layout:
+  +------------------------------------------------------------------+
+  |  [Ability icons positioned by time - clamped vertically]         |
+  |  ═══════════════════════════════════════════════════════════════ |  <- Time axis
+  |  [Auto-attack icons (MH/OH) below the line]                      |
+  |  0s        2s        4s        6s        8s        10s           |
+  +------------------------------------------------------------------+
+================================================================================
+]]--
+
+ATW.Timeline = {
+	frame = nil,
+	abilityIcons = {},
+	autoAttackIcons = {},
+	maxAbilityIcons = 20,
+	maxAutoIcons = 15,
+	abilityIconSize = 28,
+	autoIconSize = 20,
+	updateInterval = 0.05,  -- 50ms for timeline (less critical than main icon)
+	lastUpdate = 0,
+	isVisible = false,
+
+	-- Timeline dimensions
+	width = 450,
+	height = 100,
+	timelineHorizon = 10000,  -- 10 seconds
+	padding = 10,
+	axisY = 50,  -- Y position of the time axis (from top)
+}
+
+---------------------------------------
+-- Get spell icon texture by name
+---------------------------------------
+local function GetTimelineSpellIcon(spellName)
+	if not spellName then return nil end
+
+	-- Handle stance switches
+	if spellName == "BattleStance" then
+		return "Interface\\Icons\\Ability_Warrior_OffensiveStance"
+	elseif spellName == "BerserkerStance" then
+		return "Interface\\Icons\\Ability_Racial_Avatar"
+	elseif spellName == "DefensiveStance" then
+		return "Interface\\Icons\\Ability_Warrior_DefensiveStance"
+	end
+
+	-- Handle racials
+	if spellName == "BloodFury" then
+		return "Interface\\Icons\\Racial_Orc_BerserkerStrength"
+	elseif spellName == "Berserking" then
+		return "Interface\\Icons\\Racial_Troll_Berserk"
+	elseif spellName == "Perception" then
+		return "Interface\\Icons\\Spell_Nature_Sleep"
+	end
+
+	-- Handle auto-attacks
+	if spellName == "AutoAttack" then
+		return "Interface\\Icons\\INV_Sword_04"
+	elseif spellName == "AutoAttackOH" then
+		return "Interface\\Icons\\INV_Sword_04"
+	end
+
+	-- Try to get from spell book
+	local id = ATW.SpellID and ATW.SpellID(spellName)
+	if id then
+		return GetSpellTexture(id, BOOKTYPE_SPELL)
+	end
+
+	-- Fallback for common abilities
+	local fallbacks = {
+		Bloodthirst = "Interface\\Icons\\Spell_Nature_BloodLust",
+		Whirlwind = "Interface\\Icons\\Ability_Whirlwind",
+		Execute = "Interface\\Icons\\INV_Sword_48",
+		HeroicStrike = "Interface\\Icons\\Ability_Rogue_Ambush",
+		Cleave = "Interface\\Icons\\Ability_Warrior_Cleave",
+		Overpower = "Interface\\Icons\\Ability_MeleeDamage",
+		Rend = "Interface\\Icons\\Ability_Gouge",
+		Slam = "Interface\\Icons\\Ability_Warrior_DecisiveStrike",
+		MortalStrike = "Interface\\Icons\\Ability_Warrior_SavageBlow",
+		Charge = "Interface\\Icons\\Ability_Warrior_Charge",
+		BattleShout = "Interface\\Icons\\Ability_Warrior_BattleShout",
+		Bloodrage = "Interface\\Icons\\Ability_Racial_BloodRage",
+		DeathWish = "Interface\\Icons\\Spell_Shadow_DeathPact",
+		Recklessness = "Interface\\Icons\\Ability_CriticalStrike",
+		SweepingStrikes = "Interface\\Icons\\Ability_Rogue_SliceDice",
+		Pummel = "Interface\\Icons\\INV_Gauntlets_04",
+		BerserkerRage = "Interface\\Icons\\Spell_Nature_AncestralGuardian",
+	}
+
+	return fallbacks[spellName]
+end
+
+---------------------------------------
+-- Create a timeline icon (ability or auto-attack)
+---------------------------------------
+local function CreateTimelineIconFrame(parent, name, size, isAuto)
+	local iconFrame = CreateFrame("Frame", name, parent)
+	iconFrame:SetWidth(size)
+	iconFrame:SetHeight(size)
+	iconFrame:SetFrameLevel(parent:GetFrameLevel() + 2)
+
+	-- Background
+	iconFrame.bg = iconFrame:CreateTexture(nil, "BACKGROUND")
+	iconFrame.bg:SetAllPoints(iconFrame)
+	iconFrame.bg:SetTexture(0, 0, 0, 0.8)
+
+	-- Icon texture
+	iconFrame.icon = iconFrame:CreateTexture(nil, "ARTWORK")
+	iconFrame.icon:SetPoint("TOPLEFT", iconFrame, "TOPLEFT", 2, -2)
+	iconFrame.icon:SetPoint("BOTTOMRIGHT", iconFrame, "BOTTOMRIGHT", -2, 2)
+	iconFrame.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+	-- Border
+	iconFrame.border = iconFrame:CreateTexture(nil, "OVERLAY")
+	iconFrame.border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+	iconFrame.border:SetBlendMode("ADD")
+	iconFrame.border:SetWidth(size * 1.4)
+	iconFrame.border:SetHeight(size * 1.4)
+	iconFrame.border:SetPoint("CENTER", iconFrame, "CENTER", 0, 0)
+	iconFrame.border:SetVertexColor(1, 1, 1, 0.5)
+
+	-- Connector line to axis
+	iconFrame.connector = iconFrame:CreateTexture(nil, "BACKGROUND")
+	iconFrame.connector:SetTexture(0.5, 0.5, 0.5, 0.5)
+	iconFrame.connector:SetWidth(1)
+	iconFrame.connector:Hide()
+
+	-- Off-GCD indicator (yellow dot)
+	if not isAuto then
+		iconFrame.offGCD = iconFrame:CreateTexture(nil, "OVERLAY")
+		iconFrame.offGCD:SetTexture(1, 0.8, 0, 1)
+		iconFrame.offGCD:SetWidth(6)
+		iconFrame.offGCD:SetHeight(6)
+		iconFrame.offGCD:SetPoint("TOPRIGHT", iconFrame, "TOPRIGHT", 0, 0)
+		iconFrame.offGCD:Hide()
+	end
+
+	-- OH indicator for off-hand auto-attacks
+	if isAuto then
+		iconFrame.ohLabel = iconFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		iconFrame.ohLabel:SetPoint("CENTER", iconFrame, "CENTER", 0, 0)
+		iconFrame.ohLabel:SetText("OH")
+		iconFrame.ohLabel:SetTextColor(1, 0.5, 0, 1)
+		iconFrame.ohLabel:Hide()
+	end
+
+	iconFrame:Hide()
+	return iconFrame
+end
+
+---------------------------------------
+-- Create the timeline frame
+---------------------------------------
+function ATW.CreateTimeline()
+	if ATW.Timeline.frame then return end
+
+	local TL = ATW.Timeline
+	local cfg = AutoTurtleWarrior_Config
+
+	-- Main container
+	local frame = CreateFrame("Frame", "ATWTimeline", UIParent)
+	frame:SetWidth(TL.width)
+	frame:SetHeight(TL.height)
+	frame:SetPoint("CENTER", UIParent, "CENTER", cfg.TimelineX or 0, cfg.TimelineY or -250)
+	frame:SetMovable(true)
+	frame:EnableMouse(true)
+	frame:SetClampedToScreen(true)
+	frame:SetFrameStrata("MEDIUM")
+
+	-- Background
+	frame:SetBackdrop({
+		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+		tile = true, tileSize = 16, edgeSize = 12,
+		insets = { left = 2, right = 2, top = 2, bottom = 2 }
+	})
+	frame:SetBackdropColor(0, 0, 0, 0.9)
+	frame:SetBackdropBorderColor(0.3, 0.3, 0.5, 1)
+
+	-- Drag functionality
+	frame:SetScript("OnMouseDown", function()
+		if arg1 == "LeftButton" then
+			this:StartMoving()
+		end
+	end)
+	frame:SetScript("OnMouseUp", function()
+		this:StopMovingOrSizing()
+		local _, _, _, x, y = this:GetPoint()
+		AutoTurtleWarrior_Config.TimelineX = x
+		AutoTurtleWarrior_Config.TimelineY = y
+	end)
+
+	-- Time axis line
+	frame.axis = frame:CreateTexture(nil, "ARTWORK")
+	frame.axis:SetTexture(0.6, 0.6, 0.6, 1)
+	frame.axis:SetHeight(2)
+	frame.axis:SetPoint("LEFT", frame, "LEFT", TL.padding, 0)
+	frame.axis:SetPoint("RIGHT", frame, "RIGHT", -TL.padding, 0)
+	frame.axis:SetPoint("TOP", frame, "TOP", 0, -TL.axisY)
+
+	-- Time markers (0s, 2s, 4s, etc.)
+	frame.timeMarkers = {}
+	local usableWidth = TL.width - (TL.padding * 2)
+	for i = 0, 5 do
+		local marker = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		local xPos = TL.padding + (i / 5) * usableWidth
+		marker:SetPoint("TOP", frame, "TOPLEFT", xPos, -TL.axisY - 5)
+		marker:SetText(string.format("%ds", i * 2))
+		marker:SetTextColor(0.6, 0.6, 0.6, 1)
+		frame.timeMarkers[i] = marker
+
+		-- Tick mark
+		local tick = frame:CreateTexture(nil, "ARTWORK")
+		tick:SetTexture(0.6, 0.6, 0.6, 1)
+		tick:SetWidth(1)
+		tick:SetHeight(6)
+		tick:SetPoint("TOP", frame, "TOPLEFT", xPos, -TL.axisY + 3)
+	end
+
+	-- Labels
+	frame.abilityLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	frame.abilityLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 5, -5)
+	frame.abilityLabel:SetText("Abilities")
+	frame.abilityLabel:SetTextColor(0.7, 0.9, 0.7, 1)
+
+	frame.autoLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	frame.autoLabel:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 5, 5)
+	frame.autoLabel:SetText("Auto")
+	frame.autoLabel:SetTextColor(0.7, 0.7, 0.9, 1)
+
+	-- Create ability icon pool
+	TL.abilityIcons = {}
+	for i = 1, TL.maxAbilityIcons do
+		TL.abilityIcons[i] = CreateTimelineIconFrame(frame, "ATWTLAbility" .. i, TL.abilityIconSize, false)
+	end
+
+	-- Create auto-attack icon pool
+	TL.autoAttackIcons = {}
+	for i = 1, TL.maxAutoIcons do
+		TL.autoAttackIcons[i] = CreateTimelineIconFrame(frame, "ATWTLAuto" .. i, TL.autoIconSize, true)
+	end
+
+	-- Update script
+	frame:SetScript("OnUpdate", function()
+		local now = GetTime()
+		if now - TL.lastUpdate >= TL.updateInterval then
+			ATW.UpdateTimeline()
+			TL.lastUpdate = now
+		end
+	end)
+
+	TL.frame = frame
+
+	-- Initial visibility
+	if cfg.ShowTimeline then
+		frame:Show()
+		TL.isVisible = true
+	else
+		frame:Hide()
+		TL.isVisible = false
+	end
+end
+
+---------------------------------------
+-- Convert time to X position on timeline
+---------------------------------------
+local function TimeToX(timeMs, TL)
+	local usableWidth = TL.width - (TL.padding * 2)
+	local fraction = timeMs / TL.timelineHorizon
+	if fraction > 1 then fraction = 1 end
+	if fraction < 0 then fraction = 0 end
+	return TL.padding + (fraction * usableWidth)
+end
+
+---------------------------------------
+-- Update the timeline display
+---------------------------------------
+function ATW.UpdateTimeline()
+	local TL = ATW.Timeline
+	if not TL.frame or not TL.frame:IsVisible() then return end
+
+	-- Hide all icons first
+	for i = 1, TL.maxAbilityIcons do
+		TL.abilityIcons[i]:Hide()
+	end
+	for i = 1, TL.maxAutoIcons do
+		TL.autoAttackIcons[i]:Hide()
+	end
+
+	-- Get timeline data from Engine
+	local timeline = nil
+	if ATW.Engine and ATW.Engine.GetSimulationTimeline then
+		local ok, result = pcall(ATW.Engine.GetSimulationTimeline, 20, TL.timelineHorizon)
+		if ok and result then
+			timeline = result
+		end
+	end
+
+	if not timeline or table.getn(timeline) == 0 then
+		return
+	end
+
+	-- Separate abilities and auto-attacks
+	local abilities = {}
+	local autoAttacks = {}
+
+	for _, entry in ipairs(timeline) do
+		if entry.isAutoAttack then
+			table.insert(autoAttacks, entry)
+		else
+			table.insert(abilities, entry)
+		end
+	end
+
+	-- Position abilities ABOVE the axis with vertical clamping
+	local abilitySlots = {}  -- Track occupied X ranges per Y level
+	local abilityIdx = 1
+	local baseY = TL.axisY - TL.abilityIconSize - 5  -- Base position above axis
+
+	for _, entry in ipairs(abilities) do
+		if abilityIdx > TL.maxAbilityIcons then break end
+
+		local iconFrame = TL.abilityIcons[abilityIdx]
+		local xPos = TimeToX(entry.time or 0, TL)
+
+		-- Find Y level that doesn't overlap
+		local yLevel = 0
+		local iconHalfWidth = TL.abilityIconSize / 2
+		local xMin = xPos - iconHalfWidth
+		local xMax = xPos + iconHalfWidth
+
+		-- Check each Y level for overlap
+		local foundSlot = false
+		while not foundSlot and yLevel < 3 do  -- Max 3 levels
+			local levelSlots = abilitySlots[yLevel] or {}
+			local overlaps = false
+
+			for _, slot in ipairs(levelSlots) do
+				if not (xMax < slot.xMin or xMin > slot.xMax) then
+					overlaps = true
+					break
+				end
+			end
+
+			if not overlaps then
+				foundSlot = true
+				if not abilitySlots[yLevel] then
+					abilitySlots[yLevel] = {}
+				end
+				table.insert(abilitySlots[yLevel], {xMin = xMin, xMax = xMax})
+			else
+				yLevel = yLevel + 1
+			end
+		end
+
+		local yPos = baseY - (yLevel * (TL.abilityIconSize + 2))
+
+		-- Position icon
+		iconFrame:ClearAllPoints()
+		iconFrame:SetPoint("CENTER", TL.frame, "TOPLEFT", xPos, -TL.axisY + (TL.axisY - yPos - TL.abilityIconSize/2))
+
+		-- Set icon texture
+		local texture = GetTimelineSpellIcon(entry.name)
+		if texture then
+			iconFrame.icon:SetTexture(texture)
+			iconFrame.icon:SetVertexColor(1, 1, 1, 1)
+		else
+			iconFrame.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+		end
+
+		-- First ability gets green border
+		if abilityIdx == 1 then
+			iconFrame.border:SetVertexColor(0, 1, 0, 0.9)
+		else
+			iconFrame.border:SetVertexColor(1, 1, 1, 0.4)
+		end
+
+		-- Off-GCD indicator
+		if entry.isOffGCD and iconFrame.offGCD then
+			iconFrame.offGCD:Show()
+		elseif iconFrame.offGCD then
+			iconFrame.offGCD:Hide()
+		end
+
+		-- Draw connector line to axis
+		iconFrame.connector:ClearAllPoints()
+		iconFrame.connector:SetPoint("TOP", iconFrame, "BOTTOM", 0, 0)
+		iconFrame.connector:SetHeight(yPos + TL.abilityIconSize/2 - TL.axisY + TL.axisY)
+		iconFrame.connector:Show()
+
+		iconFrame:Show()
+		abilityIdx = abilityIdx + 1
+	end
+
+	-- Position auto-attacks BELOW the axis with vertical clamping
+	local autoSlots = {}
+	local autoIdx = 1
+	local autoBaseY = TL.axisY + 5  -- Base position below axis
+
+	for _, entry in ipairs(autoAttacks) do
+		if autoIdx > TL.maxAutoIcons then break end
+
+		local iconFrame = TL.autoAttackIcons[autoIdx]
+		local xPos = TimeToX(entry.time or 0, TL)
+
+		-- Find Y level that doesn't overlap
+		local yLevel = 0
+		local iconHalfWidth = TL.autoIconSize / 2
+		local xMin = xPos - iconHalfWidth
+		local xMax = xPos + iconHalfWidth
+
+		local foundSlot = false
+		while not foundSlot and yLevel < 2 do  -- Max 2 levels for autos
+			local levelSlots = autoSlots[yLevel] or {}
+			local overlaps = false
+
+			for _, slot in ipairs(levelSlots) do
+				if not (xMax < slot.xMin or xMin > slot.xMax) then
+					overlaps = true
+					break
+				end
+			end
+
+			if not overlaps then
+				foundSlot = true
+				if not autoSlots[yLevel] then
+					autoSlots[yLevel] = {}
+				end
+				table.insert(autoSlots[yLevel], {xMin = xMin, xMax = xMax})
+			else
+				yLevel = yLevel + 1
+			end
+		end
+
+		local yPos = autoBaseY + (yLevel * (TL.autoIconSize + 2))
+
+		-- Position icon
+		iconFrame:ClearAllPoints()
+		iconFrame:SetPoint("CENTER", TL.frame, "TOPLEFT", xPos, -yPos - TL.autoIconSize/2)
+
+		-- Set icon texture
+		local texture = GetTimelineSpellIcon(entry.name)
+		if texture then
+			iconFrame.icon:SetTexture(texture)
+			-- MH = normal color, OH = tinted orange
+			if entry.isOH then
+				iconFrame.icon:SetVertexColor(1, 0.6, 0.3, 1)
+				if iconFrame.ohLabel then iconFrame.ohLabel:Show() end
+			else
+				iconFrame.icon:SetVertexColor(0.8, 0.8, 1, 1)
+				if iconFrame.ohLabel then iconFrame.ohLabel:Hide() end
+			end
+		end
+
+		iconFrame.border:SetVertexColor(0.5, 0.5, 0.7, 0.4)
+
+		-- Draw connector line to axis
+		iconFrame.connector:ClearAllPoints()
+		iconFrame.connector:SetPoint("BOTTOM", iconFrame, "TOP", 0, 0)
+		iconFrame.connector:SetHeight(yPos - TL.axisY)
+		iconFrame.connector:Show()
+
+		iconFrame:Show()
+		autoIdx = autoIdx + 1
+	end
+end
+
+---------------------------------------
+-- Toggle timeline visibility
+---------------------------------------
+function ATW.ToggleTimeline()
+	if not ATW.Timeline.frame then
+		ATW.CreateTimeline()
+	end
+
+	local TL = ATW.Timeline
+	if TL.frame:IsVisible() then
+		TL.frame:Hide()
+		TL.isVisible = false
+		AutoTurtleWarrior_Config.ShowTimeline = false
+		ATW.Print("Timeline: OFF")
+	else
+		TL.frame:Show()
+		TL.isVisible = true
+		AutoTurtleWarrior_Config.ShowTimeline = true
+		ATW.Print("Timeline: ON")
+	end
+end
+
+---------------------------------------
+-- Reset timeline position
+---------------------------------------
+function ATW.ResetTimelinePosition()
+	if ATW.Timeline.frame then
+		ATW.Timeline.frame:ClearAllPoints()
+		ATW.Timeline.frame:SetPoint("CENTER", UIParent, "CENTER", 0, -250)
+		AutoTurtleWarrior_Config.TimelineX = 0
+		AutoTurtleWarrior_Config.TimelineY = -250
+		ATW.Print("Timeline position reset")
+	end
+end
+
+---------------------------------------
+-- Initialize timeline (called after display init)
+---------------------------------------
+function ATW.InitTimeline()
+	if AutoTurtleWarrior_Config.ShowTimeline then
+		ATW.CreateTimeline()
 	end
 end

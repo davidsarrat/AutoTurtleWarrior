@@ -14,8 +14,9 @@ Single-layer **Tactical Simulation** with manual cooldown toggles. No hardcoded 
 |  Key Features:                                              |
 |  - Stance switches as FIRST-CLASS ACTIONS                   |
 |  - Real swing timers (mhTimer/ohTimer)                      |
-|  - 9-second lookahead (6 GCDs)                              |
+|  - Configurable lookahead (default 30s / 20 GCDs)           |
 |  - HS/Cleave valued by actual swing timing                  |
+|  - Charge travel time simulation (28 yards/sec)             |
 +-------------------------------------------------------------+
                           |
                           v
@@ -214,12 +215,62 @@ end
 ### Impact on Auto-Attacks
 ```lua
 -- EstimateAutoAttackDamage:
-if not state.inMeleeRange and timeToMelee > 0 then
-    -- No auto-attacks during travel
-    horizon = horizon - timeToMelee
-    if horizon <= 0 then return 0 end
+if not state.inMeleeRange then
+    local timeToMelee = state.timeToMelee or 0
+    if timeToMelee > 0 then
+        -- Traveling after Charge - reduce horizon by travel time
+        horizon = horizon - timeToMelee
+        if horizon <= 0 then return 0 end
+        -- Continue with remaining horizon after arrival
+    else
+        -- NOT in melee and NOT traveling = can't auto-attack!
+        -- This happens at Charge range before Charging
+        return 0
+    end
 end
 ```
+
+**Critical Logic:**
+- `inMeleeRange = false` AND `timeToMelee = 0` → At Charge range, haven't Charged → **0 auto-attacks**
+- `inMeleeRange = false` AND `timeToMelee > 0` → Just Charged, traveling → **reduce horizon by travel time**
+- `inMeleeRange = true` → In melee → **normal auto-attack calculation**
+
+### Pre-Combat Detection (Charge Opener)
+
+The simulator correctly identifies when we're at Charge range and need to Charge first:
+
+```lua
+-- In CaptureCurrentState():
+if state.inCombat then
+    -- In combat: assume melee (we're actively fighting)
+    state.inMeleeRange = true
+else
+    -- Out of combat: check if we're in Charge range (8-25 yards)
+    local inChargeRange = state.targetDistance and
+        state.targetDistance >= Engine.CHARGE_MIN_RANGE and
+        state.targetDistance <= Engine.CHARGE_MAX_RANGE
+
+    if inChargeRange then
+        -- NOT in melee - need to Charge to engage!
+        -- Auto-attacks and melee abilities won't work
+        state.inMeleeRange = false
+    else
+        -- Very close (<8yd) or no data - assume melee
+        state.inMeleeRange = true
+    end
+end
+```
+
+**Why This Matters:**
+- At Charge range with `inMeleeRange = false`:
+  - Auto-attack damage = 0 (not in melee)
+  - Melee abilities blocked by `canMelee()` check
+  - Charge is the ONLY way to enable damage
+- Charge gets massive value because it:
+  - Generates rage (9-15 with talent)
+  - Enables all auto-attacks
+  - Enables all melee abilities
+- Pre-combat buffs (Perception, etc.) have much lower value since they don't enable damage
 
 ## Decision Flow
 
@@ -415,7 +466,7 @@ end
 
 ### 5. SimulateDecisionHorizon(state, firstAction, horizon)
 
-Simulates 9 seconds (6 GCDs) with auto-attack damage:
+Simulates configurable horizon (default 30s / 20 GCDs) with auto-attack damage:
 
 ```lua
 function SimulateDecisionHorizon(state, firstAction, horizon)
@@ -468,8 +519,9 @@ function GetBestAction()
     local actions = GetValidActions(state)
     local bestAction, bestDamage = nil, -1
 
+    local horizon = Engine.GetHorizon()  -- Default 30000ms
     for _, action in ipairs(actions) do
-        local damage = SimulateDecisionHorizon(state, action, 9000)
+        local damage = SimulateDecisionHorizon(state, action, horizon)
         if damage > bestDamage then
             bestDamage = damage
             bestAction = action
@@ -569,13 +621,15 @@ With 5/5 Tactical Mastery (25 rage retained):
 /atw cache      - Show cache hit rate and timing
 /atw swing      - Show swing timer state
 /atw sim        - Run extended simulation
+/atw horizon    - Show current decision horizon
+/atw horizon N  - Set decision horizon to N seconds (3-120)
 ```
 
 ### Example: /atw decision
 
 ```
 === Decision Simulator ===
-Horizon: 9s (6 GCDs)
+Horizon: 30s (20 GCDs)
 
 Action comparison:
   BerserkerStance: 14500 dmg << BEST (stance switch)
@@ -597,6 +651,7 @@ Current state:
 ```lua
 AutoTurtleWarrior_Config = {
     DanceRage = 10,         -- Min rage to consider stance dancing
+    DecisionHorizon = 30000, -- Simulation lookahead (ms), default 30s
 
     -- Cooldown Toggles
     BurstEnabled = true,    -- Death Wish + Racials
@@ -620,7 +675,7 @@ AutoTurtleWarrior_Config = {
 
 ### Simulation Solves These
 
-The simulation **compares actual damage** over a 9-second window:
+The simulation **compares actual damage** over the decision horizon (default 30s):
 - Stance switch now vs use Overpower? Calculate both, pick higher
 - HS now vs save for BT? Simulate both scenarios with real swing timers
 - Execute vs WW on 4 targets? WW might do 4x damage

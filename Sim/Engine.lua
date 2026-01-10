@@ -2035,18 +2035,39 @@ function Engine.CaptureCurrentState()
 	state.inCombat = UnitAffectingCombat("player") or false
 
 	---------------------------------------
-	-- TARGET DISTANCE (for Charge range check: 8-25 yards)
-	-- We ALWAYS assume melee range in normal combat.
-	-- Travel time only matters when simulating a Charge opener.
+	-- TARGET DISTANCE AND MELEE RANGE
+	-- Key insight:
+	-- - In combat: assume melee (we're fighting)
+	-- - Out of combat + in Charge range: NOT in melee (need to Charge first!)
+	-- This ensures Charge is properly valued vs buffs like Perception
 	---------------------------------------
 	state.targetDistance = nil
 	if ATW.GetDistance then
 		state.targetDistance = ATW.GetDistance("target")
 	end
 
-	-- Always assume in melee - travel time only set when Charge is simulated
-	state.inMeleeRange = true
 	state.timeToMelee = 0
+
+	-- Determine melee range based on combat state
+	if state.inCombat then
+		-- In combat: always assume melee (we're actively fighting)
+		state.inMeleeRange = true
+	else
+		-- Out of combat: check if we're in Charge range (8-25 yards)
+		-- If yes, we're NOT in melee - we need to Charge to get there!
+		local inChargeRange = state.targetDistance and
+			state.targetDistance >= Engine.CHARGE_MIN_RANGE and
+			state.targetDistance <= Engine.CHARGE_MAX_RANGE
+
+		if inChargeRange then
+			-- We're at Charge range - NOT in melee
+			-- Auto-attacks and melee abilities won't work until we Charge
+			state.inMeleeRange = false
+		else
+			-- Either very close (<8yd) or no distance data - assume melee
+			state.inMeleeRange = true
+		end
+	end
 
 	---------------------------------------
 	-- SWING QUEUE STATE (HS/Cleave already queued?)
@@ -2235,10 +2256,18 @@ function Engine.GetValidActions(state)
 	-- STANCE SWITCH ACTIONS
 	-- These are explicit actions the simulator can choose
 	-- Value comes from enabling abilities + Berserker crit bonus
+	-- NOTE: Default to true if AvailableStances not set (warriors have all stances at 60)
 	---------------------------------------
 	if stanceCdReady then
+		local hasStance = function(s)
+			if ATW.AvailableStances then
+				return ATW.AvailableStances[s]
+			end
+			return true  -- Default: assume all stances available
+		end
+
 		-- Berserker Stance (if not already in it)
-		if stance ~= 3 and ATW.AvailableStances and ATW.AvailableStances[3] then
+		if stance ~= 3 and hasStance(3) then
 			table.insert(actions, {
 				name = "BerserkerStance",
 				targetStance = 3,
@@ -2249,7 +2278,7 @@ function Engine.GetValidActions(state)
 		end
 
 		-- Battle Stance (if not already in it)
-		if stance ~= 1 and ATW.AvailableStances and ATW.AvailableStances[1] then
+		if stance ~= 1 and hasStance(1) then
 			table.insert(actions, {
 				name = "BattleStance",
 				targetStance = 1,
@@ -2260,11 +2289,6 @@ function Engine.GetValidActions(state)
 		end
 
 		-- Defensive Stance: NEVER recommended for DPS rotation
-		-- Only Battle (for Overpower/Charge/Rend) and Berserker (for BT/WW/+3% crit) matter
-		-- Keeping this commented out to document why it's excluded:
-		-- if stance ~= 2 and ATW.AvailableStances and ATW.AvailableStances[2] then
-		--     table.insert(actions, { name = "DefensiveStance", ... })
-		-- end
 	end
 
 	-- Helper: check if spell is learned (has rank > 0)
@@ -2331,36 +2355,28 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- Helper: Check if we can use melee abilities
-	-- Requires: in melee range OR timeToMelee has elapsed
-	-- During Charge travel, we're NOT in melee and can't use melee abilities
+	-- Logic:
+	--   inMeleeRange = true  → CAN melee (in combat or very close)
+	--   inMeleeRange = false, timeToMelee > 0 → traveling after Charge, wait
+	--   inMeleeRange = false, timeToMelee = 0 → at Charge range, CAN'T melee
 	---------------------------------------
 	local function canMelee()
-		-- If we're in melee range, we can melee
+		-- In melee range = can use melee abilities
 		if state.inMeleeRange then
 			return true
 		end
-		-- If we have travel time remaining, we can't melee
-		if state.timeToMelee and state.timeToMelee > 0 then
-			return false
-		end
-		-- Default to true (assume melee if no distance data)
-		return true
+		-- Not in melee range = can't melee (either traveling or at Charge range)
+		return false
 	end
 
 	-- Whirlwind has 8-yard range, slightly longer than melee
 	local function canWhirlwind()
+		-- In melee range = can WW
 		if state.inMeleeRange then
 			return true
 		end
-		-- Check 8-yard range
-		if state.targetDistance and state.targetDistance <= 8 then
-			return true
-		end
-		-- If traveling after Charge, need to wait
-		if state.timeToMelee and state.timeToMelee > 0 then
-			return false
-		end
-		return true
+		-- Not in melee = can't WW
+		return false
 	end
 
 	---------------------------------------
@@ -3196,8 +3212,8 @@ function Engine.ApplyAction(state, action)
 
 		-- Generate rage from auto-attacks (rough estimate)
 		-- ~15 rage per 1.5s GCD from dual wield auto-attacks
-		-- NOTE: Only generate rage if in melee range (not traveling after Charge)
-		if newState.inMeleeRange or (newState.timeToMelee or 0) <= 0 then
+		-- NOTE: Only generate rage if actually in melee range
+		if newState.inMeleeRange then
 			local ragePerGCD = 15
 			if not newState.hasOH then
 				ragePerGCD = 10  -- Less rage with 2H
@@ -3235,9 +3251,42 @@ function Engine.SimulateDecisionHorizon(state, firstAction, horizon)
 	-- CRITICAL: Include auto-attack damage over horizon
 	-- This is calculated AFTER applying the first action so that
 	-- HeroicStrike/Cleave queueing is properly reflected in swingQueued
-	-- This ensures HS/Cleave actions are properly valued vs other abilities
+	--
+	-- SPECIAL CASE: If we're not in melee after first action but Charge
+	-- is available (in Battle Stance, at Charge range), we need to account
+	-- for the fact that we'll Charge and then have auto-attacks.
 	---------------------------------------
-	local autoDamage = Engine.EstimateAutoAttackDamage(simState, horizon)
+	local autoState = simState
+	local chargeSimulated = false
+
+	if not simState.inMeleeRange and (simState.timeToMelee or 0) == 0 then
+		-- We're not in melee and haven't Charged yet
+		-- Check if Charge is available in current state (after first action)
+		if not simState.inCombat and simState.stance == 1 then
+			local chargeReady = (simState.cooldowns.Charge or 0) <= 0
+
+			-- Be lenient with Charge range check - if no distance data, assume we can Charge
+			local canCharge = chargeReady
+			if simState.targetDistance then
+				-- If we have distance data, verify we're in range
+				canCharge = chargeReady and
+					simState.targetDistance >= Engine.CHARGE_MIN_RANGE and
+					simState.targetDistance <= Engine.CHARGE_MAX_RANGE
+			end
+
+			if canCharge then
+				-- Charge is available - create modified state for auto-attack estimation
+				autoState = Engine.DeepCopyState(simState)
+				-- After Charge GCD (1500ms), we arrive (travel < GCD always)
+				autoState.inMeleeRange = true
+				autoState.timeToMelee = 0
+				autoState.inCombat = true
+				chargeSimulated = true
+			end
+		end
+	end
+
+	local autoDamage = Engine.EstimateAutoAttackDamage(autoState, horizon)
 	totalDamage = totalDamage + autoDamage
 
 	if not firstAction.offGCD then
@@ -3288,18 +3337,26 @@ end
 ---------------------------------------
 function Engine.EstimateAutoAttackDamage(state, horizon)
 	local damage = 0
+	local timeToMelee = state.timeToMelee or 0
 
 	---------------------------------------
-	-- TRAVEL TIME CHECK: No auto-attacks until in melee range
-	-- If we just Charged, we need to account for travel time
+	-- MELEE RANGE CHECK: No auto-attacks if not in melee range
+	-- Two scenarios:
+	-- 1. At Charge range, haven't Charged yet (timeToMelee = 0) -> NO auto-attacks
+	-- 2. Just Charged, traveling (timeToMelee > 0) -> reduce horizon by travel time
 	---------------------------------------
-	local timeToMelee = state.timeToMelee or 0
-	if not state.inMeleeRange and timeToMelee > 0 then
-		-- We're not in melee yet - no auto-attacks during travel
-		-- Reduce effective horizon by travel time
-		horizon = horizon - timeToMelee
-		if horizon <= 0 then
-			return 0  -- Entire horizon is spent traveling
+	if not state.inMeleeRange then
+		if timeToMelee > 0 then
+			-- Traveling after Charge - reduce horizon by travel time
+			horizon = horizon - timeToMelee
+			if horizon <= 0 then
+				return 0  -- Entire horizon is spent traveling
+			end
+			-- After travel time, we'll be in melee - continue calculation
+		else
+			-- NOT in melee and NOT traveling = can't auto-attack at all!
+			-- This happens when we're at Charge range but haven't Charged yet
+			return 0
 		end
 	end
 
@@ -3545,7 +3602,21 @@ function Engine.PrintDecisionDebug()
 	ATW.Print("")
 	ATW.Print("Current state:")
 	ATW.Print("  Rage: " .. state.rage)
-	ATW.Print("  Stance: " .. state.stance)
+	ATW.Print("  Stance: " .. state.stance .. " (" .. ({[1]="Battle",[2]="Def",[3]="Berserker"})[state.stance] .. ")")
+	ATW.Print("  In Combat: " .. (state.inCombat and "YES" or "NO"))
+	ATW.Print("  In Melee Range: " .. (state.inMeleeRange and "YES" or "NO"))
+	ATW.Print("  Target Distance: " .. (state.targetDistance and string.format("%.1f", state.targetDistance) .. " yd" or "UNKNOWN"))
+	ATW.Print("  Time To Melee: " .. (state.timeToMelee or 0) .. " ms")
+
+	-- Charge availability
+	local chargeReady = (state.cooldowns.Charge or 0) <= 0
+	local inChargeRange = state.targetDistance and
+		state.targetDistance >= Engine.CHARGE_MIN_RANGE and
+		state.targetDistance <= Engine.CHARGE_MAX_RANGE
+	ATW.Print("  Charge Ready: " .. (chargeReady and "YES" or "NO"))
+	ATW.Print("  In Charge Range: " .. (inChargeRange and "YES" or (state.targetDistance and "NO" or "UNKNOWN")))
+
+	ATW.Print("")
 	ATW.Print("  Battle Shout: " .. (state.hasBattleShout and "YES" or "NO"))
 	ATW.Print("  Rend (target): " .. (state.rendOnTarget and "YES" or "NO"))
 	ATW.Print("  Overpower: " .. (state.overpowerReady and ("YES (" .. string.format("%.1f", state.overpowerEnd/1000) .. "s)") or "NO"))
@@ -3570,4 +3641,238 @@ function Engine.PrintDecisionDebug()
 		ATW.Print("  Rended: " .. rendedCount .. "/" .. state.enemyCount)
 		ATW.Print("  Needs Rend: " .. needsRendCount)
 	end
+end
+
+---------------------------------------
+-- Get simulation timeline for UI display
+-- Returns array of {name, time, damage, isStanceSwitch, isOffGCD, isAutoAttack, isMH, isOH}
+-- Shows the predicted sequence of abilities AND auto-attacks over the horizon
+---------------------------------------
+function Engine.GetSimulationTimeline(maxSteps, timelineHorizon)
+	maxSteps = maxSteps or 15
+	timelineHorizon = timelineHorizon or 10000  -- 10 seconds default for UI
+
+	local state = Engine.CaptureCurrentState()
+	if not state then return {} end
+
+	-- Get best first action
+	local bestAction, bestDamage, results = Engine.GetBestAction()
+	if not bestAction then return {} end
+
+	-- Now simulate the best path and collect all actions + auto-attacks
+	local timeline = {}
+	local simState = Engine.DeepCopyState(state)
+	local gcd = Engine.DECISION_GCD
+	local timeElapsed = 0
+
+	-- Track swing timers for auto-attack prediction
+	local mhTimer = simState.mhTimer or 0
+	local ohTimer = simState.ohTimer or 0
+	local mhSpeed = simState.mhSpeed or 2500
+	local ohSpeed = simState.ohSpeed or 2500
+	local isDW = simState.isDualWield or false
+
+	-- Helper to add auto-attacks up to a certain time
+	local function addAutoAttacksUntil(endTime, startTime)
+		-- Only add auto-attacks if in melee range
+		if not simState.inMeleeRange then return end
+
+		local t = startTime or 0
+
+		-- MH swings
+		local nextMH = mhTimer
+		while nextMH <= endTime and nextMH <= timelineHorizon do
+			if nextMH >= t then
+				table.insert(timeline, {
+					name = "AutoAttack",
+					time = nextMH,
+					isAutoAttack = true,
+					isMH = true,
+					isOH = false,
+					swingQueued = simState.swingQueued,
+				})
+			end
+			nextMH = nextMH + mhSpeed
+		end
+		mhTimer = nextMH
+
+		-- OH swings (if dual wielding)
+		if isDW then
+			local nextOH = ohTimer
+			while nextOH <= endTime and nextOH <= timelineHorizon do
+				if nextOH >= t then
+					table.insert(timeline, {
+						name = "AutoAttackOH",
+						time = nextOH,
+						isAutoAttack = true,
+						isMH = false,
+						isOH = true,
+					})
+				end
+				nextOH = nextOH + ohSpeed
+			end
+			ohTimer = nextOH
+		end
+	end
+
+	-- Add first action (the best one we just calculated)
+	table.insert(timeline, {
+		name = bestAction.name,
+		time = 0,
+		damage = Engine.GetActionDamage(simState, bestAction),
+		isStanceSwitch = bestAction.isStanceSwitch or false,
+		isOffGCD = bestAction.offGCD or false,
+		targetStance = bestAction.targetStance,
+		isAutoAttack = false,
+	})
+
+	-- Apply first action
+	simState = Engine.ApplyAction(simState, bestAction)
+
+	local actionTime = 0
+	if not bestAction.offGCD then
+		actionTime = gcd
+	else
+		actionTime = 100
+	end
+	timeElapsed = timeElapsed + actionTime
+
+	-- Continue with greedy simulation
+	local steps = 1
+	while timeElapsed < timelineHorizon and steps < maxSteps do
+		local actions = Engine.GetValidActions(simState)
+		if not actions or table.getn(actions) == 0 then
+			break
+		end
+
+		-- Find best action (greedy by immediate damage)
+		local nextBest = nil
+		local nextBestDamage = -1
+
+		for _, action in ipairs(actions) do
+			if action.name ~= "Wait" then
+				local dmg = Engine.GetActionDamage(simState, action)
+				if dmg > nextBestDamage then
+					nextBestDamage = dmg
+					nextBest = action
+				end
+			end
+		end
+
+		if not nextBest then
+			break
+		end
+
+		-- Add to timeline
+		table.insert(timeline, {
+			name = nextBest.name,
+			time = timeElapsed,
+			damage = nextBestDamage,
+			isStanceSwitch = nextBest.isStanceSwitch or false,
+			isOffGCD = nextBest.offGCD or false,
+			targetStance = nextBest.targetStance,
+			isAutoAttack = false,
+		})
+
+		-- Apply action
+		simState = Engine.ApplyAction(simState, nextBest)
+
+		if not nextBest.offGCD then
+			timeElapsed = timeElapsed + gcd
+		else
+			timeElapsed = timeElapsed + 100
+		end
+
+		steps = steps + 1
+	end
+
+	-- Now add auto-attacks throughout the timeline
+	-- Reset timers and recalculate
+	mhTimer = state.mhTimer or 0
+	ohTimer = state.ohTimer or 0
+
+	-- Only add if we'll be in melee (either already there or after Charge)
+	local willBeInMelee = state.inMeleeRange
+	local meleeStartTime = 0
+
+	if not willBeInMelee then
+		-- Check if Charge is in timeline
+		for _, entry in ipairs(timeline) do
+			if entry.name == "Charge" then
+				willBeInMelee = true
+				-- Melee starts after Charge travel time
+				local travelTime = 500  -- Default
+				if state.targetDistance then
+					travelTime = (state.targetDistance / Engine.CHARGE_SPEED) * 1000
+				end
+				meleeStartTime = entry.time + travelTime
+				-- Swing timers reset on arrival
+				mhTimer = meleeStartTime
+				ohTimer = meleeStartTime + (ohSpeed / 2)  -- OH slightly offset
+				break
+			end
+		end
+	end
+
+	if willBeInMelee then
+		-- Add MH auto-attacks
+		local nextMH = mhTimer
+		while nextMH <= timelineHorizon do
+			if nextMH >= meleeStartTime then
+				table.insert(timeline, {
+					name = "AutoAttack",
+					time = nextMH,
+					isAutoAttack = true,
+					isMH = true,
+					isOH = false,
+				})
+			end
+			nextMH = nextMH + mhSpeed
+		end
+
+		-- Add OH auto-attacks if dual wielding
+		if isDW then
+			local nextOH = ohTimer
+			while nextOH <= timelineHorizon do
+				if nextOH >= meleeStartTime then
+					table.insert(timeline, {
+						name = "AutoAttackOH",
+						time = nextOH,
+						isAutoAttack = true,
+						isMH = false,
+						isOH = true,
+					})
+				end
+				nextOH = nextOH + ohSpeed
+			end
+		end
+	end
+
+	-- Sort timeline by time
+	table.sort(timeline, function(a, b) return a.time < b.time end)
+
+	return timeline
+end
+
+-- Cache for timeline (updated less frequently than main recommendation)
+Engine.timelineCache = nil
+Engine.timelineCacheTime = 0
+Engine.TIMELINE_CACHE_DURATION = 500  -- 500ms cache
+
+---------------------------------------
+-- Get cached simulation timeline
+---------------------------------------
+function Engine.GetCachedTimeline(maxSteps)
+	local now = GetTime() * 1000
+
+	-- Check cache validity
+	if Engine.timelineCache and (now - Engine.timelineCacheTime) < Engine.TIMELINE_CACHE_DURATION then
+		return Engine.timelineCache
+	end
+
+	-- Regenerate timeline
+	Engine.timelineCache = Engine.GetSimulationTimeline(maxSteps)
+	Engine.timelineCacheTime = now
+
+	return Engine.timelineCache
 end

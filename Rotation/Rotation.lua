@@ -12,9 +12,24 @@
 	- Berserker stance valued for +3% crit
 	- Battle stance valued for enabling Overpower, Charge, Rend
 	- No hardcoded "if wrong stance then switch" logic
+
+	OFF-GCD CHAINING:
+	After casting an off-GCD ability (Perception, Blood Fury, etc.), the rotation
+	immediately re-evaluates and casts the next action without requiring another
+	keypress. This allows sequences like Perception -> Charge in one keypress.
 ]]--
 
-function ATW.Rotation()
+-- Chain depth tracker to prevent infinite loops
+local MAX_OFF_GCD_CHAINS = 3
+
+function ATW.Rotation(chainDepth)
+	-- Initialize chain depth (prevents infinite recursion)
+	chainDepth = chainDepth or 0
+	if chainDepth > MAX_OFF_GCD_CHAINS then
+		ATW.Debug("Max off-GCD chain depth reached")
+		return
+	end
+
 	local cfg = AutoTurtleWarrior_Config
 	local state = ATW.State
 
@@ -111,7 +126,7 @@ function ATW.Rotation()
 	-- 2. An ability to cast -> execute normally
 	---------------------------------------
 
-	local abilityName, isStanceSwitch, targetStance, targetGUID = ATW.GetNextAbility()
+	local abilityName, isStanceSwitch, targetStance, targetGUID, isOffGCD = ATW.GetNextAbility()
 
 	if not abilityName then
 		ATW.Debug("No ability available")
@@ -154,9 +169,26 @@ function ATW.Rotation()
 	                    abilityName == "Berserking" or
 	                    abilityName == "Perception")
 
+	-- TRUE off-GCD abilities that don't trigger GCD in vanilla WoW
+	-- These can chain into the next action immediately
+	local isTrueOffGCD = (abilityName == "Bloodrage" or
+	                      abilityName == "BerserkerRage" or
+	                      abilityName == "BloodFury" or
+	                      abilityName == "Berserking" or
+	                      abilityName == "Perception")
+
 	if isSelfBuff then
 		-- ability.name contains the actual spell name (from Abilities.lua)
 		ATW.CastSelf(ability.name)
+
+		-- OFF-GCD CHAINING: After casting a true off-GCD ability,
+		-- immediately evaluate and cast the next action
+		if isTrueOffGCD then
+			ATW.Debug("Off-GCD chain: " .. abilityName .. " -> evaluating next")
+			-- Recursively call Rotation to get and cast the next action
+			ATW.Rotation(chainDepth + 1)
+		end
+		return
 
 	-- GUID-based Execute (targets any mob in execute range)
 	elseif abilityName == "Execute" then
