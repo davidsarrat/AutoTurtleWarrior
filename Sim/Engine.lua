@@ -2713,17 +2713,18 @@ function Engine.GetActionDamage(state, action)
 		canCrit = false  -- DoTs don't crit in vanilla
 
 	elseif action.name == "HeroicStrike" then
-		local bonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or 157
-		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
-		damage = weaponDmg + bonus
+		-- HS is "on next swing" - NO immediate damage
+		-- Damage is counted in EstimateAutoAttackDamage when swing lands
+		-- Returning damage here would double-count it
+		damage = 0
+		canCrit = false
 
 	elseif action.name == "Cleave" then
-		local bonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or 50
-		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
-		-- Use state.enemyCountMelee (5yd range) from CaptureCurrentState
-		local targetsHit = math.min(2, state.enemyCountMelee or 1)
-		if targetsHit < 1 then targetsHit = 1 end
-		damage = (weaponDmg + bonus) * targetsHit
+		-- Cleave is "on next swing" - NO immediate damage
+		-- Damage is counted in EstimateAutoAttackDamage when swing lands
+		-- Returning damage here would double-count it
+		damage = 0
+		canCrit = false
 
 	elseif action.name == "Wait" then
 		damage = 0

@@ -463,22 +463,16 @@ function ATW.ShouldCancelSwingAbility()
 	-- 3. Swing is more than 1s away (time to benefit)
 
 	if rage < neededRage and mhRemaining > 1.0 then
-		-- Calculate refund (partial, since HS was already "cast")
-		-- Actually HS/Cleave doesn't consume rage until swing lands
-		-- So canceling gives us "back" the full cost
-
-		-- But we also lose auto-attack damage and rage from the swing
-		-- This is the tricky part...
-
-		-- For Execute phase: ALWAYS prioritize Execute
+		-- For Execute phase: ALWAYS prioritize Execute (critical for rage economy)
+		-- Execute damage scales with excess rage, so every point matters
 		if neededAbility == "Execute" then
 			return true, "execute priority"
 		end
 
-		-- For BT/WW: Only cancel if rage is critically low
-		if rage < neededRage * 0.8 then
-			return true, "rage starved for " .. neededAbility
-		end
+		-- For BT/WW: Do NOT cancel - trust the simulator's decision
+		-- The simulator already evaluated HS vs waiting for BT/WW
+		-- Canceling here creates a toggle loop where we queue/cancel every frame
+		-- The simulator factors in rage economy when recommending HS
 	end
 
 	return false, "not worth canceling"
