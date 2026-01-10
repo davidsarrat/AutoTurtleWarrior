@@ -1,6 +1,6 @@
 --[[
 	Auto Turtle Warrior - Sim/Engine
-	TACTICAL LAYER - Combat simulation engine (9 second horizon)
+	TACTICAL LAYER - Combat simulation engine (30 second horizon, configurable)
 	Based on Zebouski/WarriorSim-TurtleWoW patterns
 
 	ARCHITECTURE:
@@ -140,6 +140,16 @@ Engine.BUFF_EFFECTS = {
 }
 
 ---------------------------------------
+-- Movement and Range Constants
+-- From TrinityCore research: Charge uses min(runSpeed*3, max(28, runSpeed*4))
+-- Base run speed = 7 y/s, so minimum Charge speed = 28 y/s
+---------------------------------------
+Engine.CHARGE_SPEED = 28         -- Yards per second (minimum Charge travel speed)
+Engine.MELEE_RANGE = 5           -- Melee range in yards
+Engine.CHARGE_MIN_RANGE = 8      -- Minimum Charge range
+Engine.CHARGE_MAX_RANGE = 25     -- Maximum Charge range
+
+---------------------------------------
 -- Stance Switching Mechanics
 -- Tactical Mastery: 5/10/15/20/25 rage retained
 ---------------------------------------
@@ -260,6 +270,12 @@ function Engine.CreateState()
 
 		-- Combat state (for Charge - can only be used out of combat)
 		inCombat = false,
+
+		-- Melee range tracking (for travel time simulation)
+		-- Charge speed: 28 yards/second minimum (from TrinityCore research)
+		inMeleeRange = true,   -- Are we currently in melee range (<=5 yards)?
+		timeToMelee = 0,       -- Milliseconds until we reach melee range (after Charge)
+		targetDistance = nil,  -- Current distance to target in yards
 
 		-- Cooldowns (time when available, 0 = ready)
 		cooldowns = {
@@ -1735,9 +1751,20 @@ end
 ---------------------------------------
 
 -- Configuration
-Engine.TACTICAL_HORIZON = 9000   -- 9 seconds (6 GCDs) for tactical decisions
-Engine.DECISION_HORIZON = 9000   -- Alias for backwards compatibility
+-- Decision horizon: how far ahead to simulate (in milliseconds)
+-- Default: 30 seconds (20 GCDs) - configurable via /atw horizon <seconds>
+Engine.TACTICAL_HORIZON = 30000  -- 30 seconds for tactical decisions
+Engine.DECISION_HORIZON = 30000  -- Alias for backwards compatibility
 Engine.DECISION_GCD = 1500       -- 1.5s GCD
+
+-- Get configured horizon (from config or default)
+function Engine.GetHorizon()
+	local cfg = AutoTurtleWarrior_Config
+	if cfg and cfg.DecisionHorizon and cfg.DecisionHorizon > 0 then
+		return cfg.DecisionHorizon
+	end
+	return Engine.DECISION_HORIZON
+end
 
 ---------------------------------------
 -- CACHING SYSTEM
@@ -2009,11 +2036,17 @@ function Engine.CaptureCurrentState()
 
 	---------------------------------------
 	-- TARGET DISTANCE (for Charge range check: 8-25 yards)
+	-- We ALWAYS assume melee range in normal combat.
+	-- Travel time only matters when simulating a Charge opener.
 	---------------------------------------
 	state.targetDistance = nil
 	if ATW.GetDistance then
 		state.targetDistance = ATW.GetDistance("target")
 	end
+
+	-- Always assume in melee - travel time only set when Charge is simulated
+	state.inMeleeRange = true
+	state.timeToMelee = 0
 
 	---------------------------------------
 	-- SWING QUEUE STATE (HS/Cleave already queued?)
@@ -2297,6 +2330,40 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
+	-- Helper: Check if we can use melee abilities
+	-- Requires: in melee range OR timeToMelee has elapsed
+	-- During Charge travel, we're NOT in melee and can't use melee abilities
+	---------------------------------------
+	local function canMelee()
+		-- If we're in melee range, we can melee
+		if state.inMeleeRange then
+			return true
+		end
+		-- If we have travel time remaining, we can't melee
+		if state.timeToMelee and state.timeToMelee > 0 then
+			return false
+		end
+		-- Default to true (assume melee if no distance data)
+		return true
+	end
+
+	-- Whirlwind has 8-yard range, slightly longer than melee
+	local function canWhirlwind()
+		if state.inMeleeRange then
+			return true
+		end
+		-- Check 8-yard range
+		if state.targetDistance and state.targetDistance <= 8 then
+			return true
+		end
+		-- If traveling after Charge, need to wait
+		if state.timeToMelee and state.timeToMelee > 0 then
+			return false
+		end
+		return true
+	end
+
+	---------------------------------------
 	-- CHARGE (Battle Stance ONLY, OUT OF COMBAT ONLY)
 	-- Simulator will recommend BattleStance first if needed
 	---------------------------------------
@@ -2310,10 +2377,10 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Execute (Battle OR Berserker, target < 20%)
+	-- Execute (Battle OR Berserker, target < 20%, REQUIRES MELEE)
 	-- Available in both stances - simulator picks based on crit bonus
 	---------------------------------------
-	if inExecute and hasSpell("Execute") and (stance == 1 or stance == 3) then
+	if inExecute and hasSpell("Execute") and (stance == 1 or stance == 3) and canMelee() then
 		local execCost = ATW.Talents and ATW.Talents.ExecCost or 15
 		if rage >= execCost then
 			table.insert(actions, {name = "Execute", rage = execCost})
@@ -2321,9 +2388,9 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Bloodthirst (Berserker ONLY, 30 rage, 6s CD)
+	-- Bloodthirst (Berserker ONLY, 30 rage, 6s CD, REQUIRES MELEE)
 	---------------------------------------
-	if ATW.Talents and ATW.Talents.HasBT and stance == 3 then
+	if ATW.Talents and ATW.Talents.HasBT and stance == 3 and canMelee() then
 		local btCost = 30
 		local btReady = (state.cooldowns.Bloodthirst or 0) <= 0
 		if btReady and rage >= btCost then
@@ -2332,10 +2399,10 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Mortal Strike (Battle OR Berserker, 30 rage, 6s CD)
+	-- Mortal Strike (Battle OR Berserker, 30 rage, 6s CD, REQUIRES MELEE)
 	-- TurtleWoW allows MS in Berserker stance
 	---------------------------------------
-	if ATW.Talents and ATW.Talents.HasMS and (stance == 1 or stance == 3) then
+	if ATW.Talents and ATW.Talents.HasMS and (stance == 1 or stance == 3) and canMelee() then
 		local msCost = 30
 		local msReady = (state.cooldowns.MortalStrike or 0) <= 0
 		if msReady and rage >= msCost then
@@ -2344,9 +2411,9 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Whirlwind (Berserker ONLY, 25 rage, 10s CD)
+	-- Whirlwind (Berserker ONLY, 25 rage, 10s CD, 8 YARD RANGE)
 	---------------------------------------
-	if hasSpell("Whirlwind") and stance == 3 then
+	if hasSpell("Whirlwind") and stance == 3 and canWhirlwind() then
 		local wwCost = 25
 		local wwReady = (state.cooldowns.Whirlwind or 0) <= 0
 		if wwReady and rage >= wwCost then
@@ -2355,9 +2422,9 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Overpower (Battle ONLY, 5 rage, requires dodge proc)
+	-- Overpower (Battle ONLY, 5 rage, requires dodge proc, REQUIRES MELEE)
 	---------------------------------------
-	if hasSpell("Overpower") and state.overpowerReady and state.overpowerEnd > 0 and stance == 1 then
+	if hasSpell("Overpower") and state.overpowerReady and state.overpowerEnd > 0 and stance == 1 and canMelee() then
 		local opCost = 5
 		local opReady = (state.cooldowns.Overpower or 0) <= 0
 		if opReady and rage >= opCost then
@@ -2376,15 +2443,15 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- REND (Battle OR Defensive ONLY, 10 rage)
+	-- REND (Battle OR Defensive ONLY, 10 rage, REQUIRES MELEE)
 	-- Simulator will recommend BattleStance first if needed
 	-- CONSERVATIVE: Require 12s TTD for meaningful tick value
 	---------------------------------------
 	local rendCost = 10
 	local MIN_REND_TTD = 12000  -- 12s = 4 ticks minimum
 
-	if not gcdActive and hasSpell("Rend") and (stance == 1 or stance == 2) and rage >= rendCost then
-		-- Multi-target Rend spread
+	if not gcdActive and hasSpell("Rend") and (stance == 1 or stance == 2) and rage >= rendCost and canMelee() then
+		-- Multi-target Rend spread (already checks enemy.distance <= 5)
 		if state.rendSpreadEnabled and state.enemies and table.getn(state.enemies) > 0 then
 			for _, enemy in ipairs(state.enemies) do
 				if not enemy.bleedImmune and not enemy.inExecute then
@@ -2415,10 +2482,10 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Slam (any stance, 15 rage, resets swing timer)
+	-- Slam (any stance, 15 rage, resets swing timer, REQUIRES MELEE)
 	-- ONLY with 2H weapon, only after auto landed
 	---------------------------------------
-	if hasSpell("Slam") and not state.hasOH then
+	if hasSpell("Slam") and not state.hasOH and canMelee() then
 		local slamCost = 15
 		local slamReady = (state.cooldowns.Slam or 0) <= 0
 		if slamReady and rage >= slamCost then
@@ -2432,7 +2499,9 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Heroic Strike (any stance, off-GCD)
+	-- Heroic Strike (any stance, off-GCD, CAN PRE-QUEUE)
+	-- Queues for next MH swing - can be queued BEFORE reaching melee!
+	-- This way HS is ready the instant we arrive and swing
 	---------------------------------------
 	if hasSpell("HeroicStrike") then
 		local hsCost = ATW.GetHeroicStrikeCost and ATW.GetHeroicStrikeCost() or 15
@@ -2442,7 +2511,9 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Cleave (any stance, off-GCD, 2+ targets)
+	-- Cleave (any stance, off-GCD, 2+ targets, CAN PRE-QUEUE)
+	-- Queues for next MH swing - can be queued BEFORE reaching melee!
+	-- This way Cleave is ready the instant we arrive and swing
 	---------------------------------------
 	if hasSpell("Cleave") then
 		local numMeleeTargets = state.enemyCountMelee or 1
@@ -2559,9 +2630,9 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Pummel (Battle OR Berserker, OFF-GCD interrupt)
+	-- Pummel (Battle OR Berserker, OFF-GCD interrupt, REQUIRES MELEE)
 	---------------------------------------
-	if AutoTurtleWarrior_Config.PummelEnabled and hasSpell("Pummel") and state.shouldInterrupt then
+	if AutoTurtleWarrior_Config.PummelEnabled and hasSpell("Pummel") and state.shouldInterrupt and canMelee() then
 		local pummelReady = (state.cooldowns.Pummel or 0) <= 0
 		local pummelCost = 10
 		if pummelReady and rage >= pummelCost and (stance == 1 or stance == 3) then
@@ -2680,7 +2751,7 @@ function Engine.GetActionDamage(state, action)
 		-- Estimate: 232 AP * 0.35 (BT coeff) * ~10 BT casts = ~800 damage value
 		-- But this is spread over time, so divide by horizon
 		local bsAP = ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or 232
-		local horizonSec = Engine.DECISION_HORIZON / 1000
+		local horizonSec = Engine.GetHorizon() / 1000
 		local gcdsInHorizon = horizonSec / 1.5
 		-- Rough value: AP bonus * ability coefficient * casts
 		damage = bsAP * 0.35 * gcdsInHorizon * 0.5  -- Conservative estimate
@@ -2752,7 +2823,7 @@ function Engine.GetActionDamage(state, action)
 	elseif action.name == "DeathWish" then
 		-- Death Wish: +20% damage for 30s
 		-- Value = expected damage increase over duration
-		local horizonSec = Engine.DECISION_HORIZON / 1000
+		local horizonSec = Engine.GetHorizon() / 1000
 		local avgDmgPerSec = 500  -- Rough estimate
 		damage = avgDmgPerSec * horizonSec * 0.20 * 0.5  -- 20% increase, discounted
 		canCrit = false
@@ -2760,7 +2831,7 @@ function Engine.GetActionDamage(state, action)
 	elseif action.name == "Recklessness" then
 		-- Recklessness: +100% crit for 15s
 		-- Massive DPS increase - high value
-		local horizonSec = math.min(15, Engine.DECISION_HORIZON / 1000)
+		local horizonSec = math.min(15, Engine.GetHorizon() / 1000)
 		local avgDmgPerSec = 500
 		-- Estimate: doubles crit rate, crit does 2x damage, so ~50% more damage
 		damage = avgDmgPerSec * horizonSec * 0.50 * 0.5  -- 50% increase, discounted
@@ -2795,7 +2866,7 @@ function Engine.GetActionDamage(state, action)
 		-- Blood Fury: +AP = level*2 for 15s
 		-- Value = estimated damage increase from extra AP over duration
 		local apBonus = ATW.GetBloodFuryAP and ATW.GetBloodFuryAP() or 120
-		local horizonSec = math.min(15, Engine.DECISION_HORIZON / 1000)
+		local horizonSec = math.min(15, Engine.GetHorizon() / 1000)
 		-- AP to DPS conversion: ~1 DPS per 14 AP (rough estimate)
 		local dpsIncrease = apBonus / 14
 		damage = dpsIncrease * horizonSec * 0.8  -- High priority - it's free (off GCD, no rage)
@@ -2805,7 +2876,7 @@ function Engine.GetActionDamage(state, action)
 		-- Berserking: 10-15% haste for 10s
 		-- Value = more auto attacks = more rage + more damage
 		local hasteBonus = ATW.GetBerserkingHaste and ATW.GetBerserkingHaste() or 10
-		local horizonSec = math.min(10, Engine.DECISION_HORIZON / 1000)
+		local horizonSec = math.min(10, Engine.GetHorizon() / 1000)
 		local avgDmgPerSec = 400
 		-- Haste increases auto attack DPS by hasteBonus%
 		damage = avgDmgPerSec * horizonSec * (hasteBonus / 100) * 0.7
@@ -2814,7 +2885,7 @@ function Engine.GetActionDamage(state, action)
 	elseif action.name == "Perception" then
 		-- Perception: +2% crit for 20s (TurtleWoW Human racial)
 		-- Value = estimated damage increase from crit bonus
-		local horizonSec = math.min(20, Engine.DECISION_HORIZON / 1000)
+		local horizonSec = math.min(20, Engine.GetHorizon() / 1000)
 		local avgDmgPerSec = 400
 		-- 2% more crits, crits do 2x damage, so ~2% more damage
 		damage = avgDmgPerSec * horizonSec * 0.02 * 0.9  -- High priority - free buff
@@ -2934,6 +3005,14 @@ function Engine.ApplyAction(state, action)
 		-- Add rage gain (already calculated in action)
 		local rageGain = action.rageGain or 9
 		newState.rage = math.min(100, newState.rage + rageGain)
+
+		-- TRAVEL TIME: Calculate time to reach melee range
+		-- Charge speed = 28 yards/second (from TrinityCore research)
+		-- Travel time = distance / speed (converted to milliseconds)
+		local distance = newState.targetDistance or 15  -- Default to mid-range
+		local travelTimeMs = (distance / Engine.CHARGE_SPEED) * 1000
+		newState.timeToMelee = travelTimeMs
+		newState.inMeleeRange = false  -- Not in melee yet, traveling
 
 	elseif action.name == "BattleShout" then
 		newState.hasBattleShout = true
@@ -3072,6 +3151,15 @@ function Engine.ApplyAction(state, action)
 			end
 		end
 
+		-- Advance travel time (after Charge) - once we arrive, we're in melee
+		if newState.timeToMelee and newState.timeToMelee > 0 then
+			newState.timeToMelee = math.max(0, newState.timeToMelee - gcd)
+			if newState.timeToMelee <= 0 then
+				newState.inMeleeRange = true  -- Arrived at target!
+				newState.targetDistance = 0   -- Now at melee range
+			end
+		end
+
 		-- Decay Overpower window
 		if newState.overpowerEnd > 0 then
 			newState.overpowerEnd = math.max(0, newState.overpowerEnd - gcd)
@@ -3108,11 +3196,14 @@ function Engine.ApplyAction(state, action)
 
 		-- Generate rage from auto-attacks (rough estimate)
 		-- ~15 rage per 1.5s GCD from dual wield auto-attacks
-		local ragePerGCD = 15
-		if not newState.hasOH then
-			ragePerGCD = 10  -- Less rage with 2H
+		-- NOTE: Only generate rage if in melee range (not traveling after Charge)
+		if newState.inMeleeRange or (newState.timeToMelee or 0) <= 0 then
+			local ragePerGCD = 15
+			if not newState.hasOH then
+				ragePerGCD = 10  -- Less rage with 2H
+			end
+			newState.rage = math.min(100, newState.rage + ragePerGCD)
 		end
-		newState.rage = math.min(100, newState.rage + ragePerGCD)
 
 		-- Decay target HP (main target)
 		if newState.targetTTD > 0 then
@@ -3193,9 +3284,24 @@ end
 -- Calculate auto-attack damage over a time horizon using REAL swing timers
 -- Uses state.mhTimer/ohTimer (time until next swing) for precise calculations
 -- Includes HS/Cleave bonus on first MH swing if queued
+-- TRAVEL TIME: If not in melee, no auto-attacks until arrival
 ---------------------------------------
 function Engine.EstimateAutoAttackDamage(state, horizon)
 	local damage = 0
+
+	---------------------------------------
+	-- TRAVEL TIME CHECK: No auto-attacks until in melee range
+	-- If we just Charged, we need to account for travel time
+	---------------------------------------
+	local timeToMelee = state.timeToMelee or 0
+	if not state.inMeleeRange and timeToMelee > 0 then
+		-- We're not in melee yet - no auto-attacks during travel
+		-- Reduce effective horizon by travel time
+		horizon = horizon - timeToMelee
+		if horizon <= 0 then
+			return 0  -- Entire horizon is spent traveling
+		end
+	end
 
 	-- Safety checks for nil values
 	local mhDmgMin = state.mhDmgMin or 100
@@ -3221,9 +3327,16 @@ function Engine.EstimateAutoAttackDamage(state, horizon)
 	-- REAL SWING TIMERS from game state
 	-- mhTimer/ohTimer = time until next swing (in ms)
 	-- If 0 or nil, swing just happened, next is at full speed
+	-- NOTE: After arrival from Charge, swing timer starts fresh
 	---------------------------------------
 	local mhTimer = state.mhTimer or 0
 	local ohTimer = state.ohTimer or 0
+
+	-- If traveling, swing timers reset to full after arrival
+	if timeToMelee > 0 then
+		mhTimer = mhSpeed
+		ohTimer = ohSpeed
+	end
 
 	-- If timer is 0 or very small, next swing is at full swing speed
 	if mhTimer <= 0 then mhTimer = mhSpeed end
@@ -3340,7 +3453,7 @@ function Engine.GetBestAction()
 	-- CD sync handled in GetValidActions via shouldWaitForDWSync()
 	---------------------------------------
 	local actions = Engine.GetValidActions(state)
-	local horizon = Engine.TACTICAL_HORIZON
+	local horizon = Engine.GetHorizon()
 
 	local bestAction = nil
 	local bestDamage = -1
@@ -3409,7 +3522,7 @@ function Engine.PrintDecisionDebug()
 	local bestAction, bestDamage, results = Engine.GetBestAction()
 
 	ATW.Print("=== Decision Simulator ===")
-	ATW.Print("Horizon: " .. (Engine.DECISION_HORIZON / 1000) .. "s")
+	ATW.Print("Horizon: " .. (Engine.GetHorizon() / 1000) .. "s")
 	ATW.Print("")
 
 	-- Sort by damage descending

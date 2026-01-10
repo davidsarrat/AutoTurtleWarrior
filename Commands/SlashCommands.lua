@@ -763,6 +763,33 @@ function ATW.HandleCommand(msg)
 			ATW.Print("Racials: " .. (table.getn(racials) > 0 and table.concat(racials, ", ") or "|cff888888none|r"))
 		end
 
+	elseif cmd == "horizon" then
+		-- Show current horizon
+		local horizon = ATW.Engine and ATW.Engine.GetHorizon() or 30000
+		ATW.Print("Decision horizon: |cff00ff00" .. (horizon / 1000) .. "s|r (" .. math.floor(horizon / 1500) .. " GCDs)")
+		ATW.Print("Usage: /atw horizon <seconds>")
+
+	elseif strfind(cmd, "^horizon%s+") then
+		-- Set horizon: /atw horizon 30
+		local _, _, seconds = strfind(cmd, "^horizon%s+([%d%.]+)")
+		if seconds then
+			seconds = tonumber(seconds)
+			if seconds and seconds >= 3 and seconds <= 120 then
+				local horizonMs = seconds * 1000
+				AutoTurtleWarrior_Config.DecisionHorizon = horizonMs
+				-- Reset cache to use new horizon
+				if ATW.Engine and ATW.Engine.Cache then
+					ATW.Engine.Cache.lastState = nil
+					ATW.Engine.Cache.lastResult = nil
+				end
+				ATW.Print("Decision horizon set to |cff00ff00" .. seconds .. "s|r (" .. math.floor(seconds / 1.5) .. " GCDs)")
+			else
+				ATW.Print("|cffff0000Invalid horizon. Range: 3-120 seconds|r")
+			end
+		else
+			ATW.Print("Usage: /atw horizon <seconds>")
+		end
+
 	else
 		-- Help
 		ATW.Print("Commands:")
@@ -781,6 +808,7 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw rendspread [on|off] - Rend spreading")
 		ATW.Print("--- Simulation ---")
 		ATW.Print("  /atw decision - Debug tactical decisions")
+		ATW.Print("  /atw horizon [sec] - Set decision window (3-120s)")
 		ATW.Print("  /atw cache - Show cache statistics")
 		ATW.Print("  /atw sim - Simulate next 5 abilities")
 		ATW.Print("  /atw engine - Full combat simulation")

@@ -156,6 +156,71 @@ if mhTimer > 0 and mhTimer < 300 then
 end
 ```
 
+## Charge Travel Time Simulation
+
+The simulator accounts for **Charge travel time** based on TrinityCore research:
+
+### Constants (from TrinityCore)
+```lua
+Engine.CHARGE_SPEED = 28         -- Yards per second (minimum)
+Engine.MELEE_RANGE = 5           -- Melee range in yards
+Engine.CHARGE_MIN_RANGE = 8      -- Minimum Charge range
+Engine.CHARGE_MAX_RANGE = 25     -- Maximum Charge range
+```
+
+### Travel Time Calculation
+- At max range (25 yards): 25 / 28 = **~890ms** travel time
+- At min range (8 yards): 8 / 28 = **~290ms** travel time
+
+### State Fields
+```lua
+state.inMeleeRange = true    -- Are we in melee range (<=5 yards)?
+state.timeToMelee = 0        -- Milliseconds until we reach melee
+state.targetDistance = nil   -- Current distance to target
+```
+
+### Ability Requirements
+
+**Melee Required (blocked during travel):**
+- Execute, Bloodthirst, Mortal Strike, Whirlwind, Overpower
+- Rend, Slam, Pummel
+
+**Pre-Queueable (can queue during travel, fires on arrival):**
+- Heroic Strike, Cleave
+- These queue for "next swing" - queue them during Charge travel so they're ready the instant you arrive!
+
+**Range-Agnostic (usable anytime):**
+- Battle Shout, Bloodrage, Death Wish, Recklessness
+- Berserker Rage, Blood Fury, Berserking
+- Stance switches
+
+### Simulation Flow After Charge
+```lua
+-- ApplyAction when Charge is used:
+local distance = newState.targetDistance or 15
+local travelTimeMs = (distance / Engine.CHARGE_SPEED) * 1000
+newState.timeToMelee = travelTimeMs
+newState.inMeleeRange = false
+
+-- ApplyAction time advancement:
+if newState.timeToMelee > 0 then
+    newState.timeToMelee = max(0, newState.timeToMelee - gcd)
+    if newState.timeToMelee <= 0 then
+        newState.inMeleeRange = true  -- Arrived!
+    end
+end
+```
+
+### Impact on Auto-Attacks
+```lua
+-- EstimateAutoAttackDamage:
+if not state.inMeleeRange and timeToMelee > 0 then
+    -- No auto-attacks during travel
+    horizon = horizon - timeToMelee
+    if horizon <= 0 then return 0 end
+end
+```
+
 ## Decision Flow
 
 ### 1. CaptureCurrentState()
