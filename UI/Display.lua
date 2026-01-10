@@ -829,9 +829,15 @@ ATW.Timeline = {
 	maxAutoIcons = 15,
 	abilityIconSize = 28,
 	autoIconSize = 20,
-	updateInterval = 0.05,  -- 50ms for timeline (less critical than main icon)
+	updateInterval = 0.02,  -- 20ms for smooth scrolling (Guitar Hero style)
 	lastUpdate = 0,
 	isVisible = false,
+
+	-- Guitar Hero style scrolling
+	lastSimulationTime = 0,      -- GetTime() when timeline was generated
+	cachedTimeline = nil,        -- Cached timeline entries
+	simulationInterval = 0.5,    -- Regenerate simulation every 500ms
+	lastSimulation = 0,          -- Last simulation time
 
 	-- Timeline dimensions
 	width = 450,
@@ -945,6 +951,13 @@ local function CreateTimelineIconFrame(parent, name, size, isAuto)
 		iconFrame.offGCD:SetHeight(6)
 		iconFrame.offGCD:SetPoint("TOPRIGHT", iconFrame, "TOPRIGHT", 0, 0)
 		iconFrame.offGCD:Hide()
+
+		-- Rage label (bottom of icon)
+		iconFrame.rageLabel = iconFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		iconFrame.rageLabel:SetPoint("BOTTOM", iconFrame, "BOTTOM", 0, -10)
+		iconFrame.rageLabel:SetTextColor(1, 0.3, 0.3, 1)
+		iconFrame.rageLabel:SetText("")
+		iconFrame.rageLabel:Hide()
 	end
 
 	-- OH indicator for off-hand auto-attacks
@@ -1009,6 +1022,18 @@ function ATW.CreateTimeline()
 	frame.axis:SetPoint("LEFT", frame, "LEFT", TL.padding, 0)
 	frame.axis:SetPoint("RIGHT", frame, "RIGHT", -TL.padding, 0)
 	frame.axis:SetPoint("TOP", frame, "TOP", 0, -TL.axisY)
+
+	-- "NOW" marker - vertical green line at left edge (time = 0)
+	frame.nowMarker = frame:CreateTexture(nil, "OVERLAY")
+	frame.nowMarker:SetTexture(0, 1, 0, 0.8)
+	frame.nowMarker:SetWidth(3)
+	frame.nowMarker:SetHeight(TL.height - 20)
+	frame.nowMarker:SetPoint("TOP", frame, "TOPLEFT", TL.padding, -5)
+
+	frame.nowLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	frame.nowLabel:SetPoint("BOTTOM", frame.nowMarker, "TOP", 0, 2)
+	frame.nowLabel:SetText("NOW")
+	frame.nowLabel:SetTextColor(0, 1, 0, 1)
 
 	-- Time markers (0s, 2s, 4s, etc.)
 	frame.timeMarkers = {}
@@ -1086,10 +1111,44 @@ end
 
 ---------------------------------------
 -- Update the timeline display
+-- GUITAR HERO STYLE: Icons scroll left as time passes
 ---------------------------------------
 function ATW.UpdateTimeline()
 	local TL = ATW.Timeline
 	if not TL.frame or not TL.frame:IsVisible() then return end
+
+	local now = GetTime()
+
+	-- Check if we need to regenerate the simulation
+	local needsSimulation = not TL.cachedTimeline or
+		(now - TL.lastSimulation) >= TL.simulationInterval
+
+	if needsSimulation then
+		-- Get fresh timeline data from Engine
+		if ATW.Engine and ATW.Engine.GetSimulationTimeline then
+			local ok, result = pcall(ATW.Engine.GetSimulationTimeline, 20, TL.timelineHorizon)
+			if ok and result and table.getn(result) > 0 then
+				TL.cachedTimeline = result
+				TL.lastSimulationTime = now
+				TL.lastSimulation = now
+			end
+		end
+	end
+
+	-- No timeline to display
+	if not TL.cachedTimeline or table.getn(TL.cachedTimeline) == 0 then
+		-- Hide all icons
+		for i = 1, TL.maxAbilityIcons do
+			TL.abilityIcons[i]:Hide()
+		end
+		for i = 1, TL.maxAutoIcons do
+			TL.autoAttackIcons[i]:Hide()
+		end
+		return
+	end
+
+	-- Calculate elapsed time since simulation was generated (in ms)
+	local elapsedMs = (now - TL.lastSimulationTime) * 1000
 
 	-- Hide all icons first
 	for i = 1, TL.maxAbilityIcons do
@@ -1099,28 +1158,30 @@ function ATW.UpdateTimeline()
 		TL.autoAttackIcons[i]:Hide()
 	end
 
-	-- Get timeline data from Engine
-	local timeline = nil
-	if ATW.Engine and ATW.Engine.GetSimulationTimeline then
-		local ok, result = pcall(ATW.Engine.GetSimulationTimeline, 20, TL.timelineHorizon)
-		if ok and result then
-			timeline = result
-		end
-	end
-
-	if not timeline or table.getn(timeline) == 0 then
-		return
-	end
-
-	-- Separate abilities and auto-attacks
+	-- Separate abilities and auto-attacks, adjusting times for scrolling
 	local abilities = {}
 	local autoAttacks = {}
 
-	for _, entry in ipairs(timeline) do
-		if entry.isAutoAttack then
-			table.insert(autoAttacks, entry)
-		else
-			table.insert(abilities, entry)
+	for _, entry in ipairs(TL.cachedTimeline) do
+		-- Adjust time by elapsed (Guitar Hero scroll effect)
+		local adjustedTime = (entry.time or 0) - elapsedMs
+
+		-- Only show entries that are in visible range (not too far in past)
+		if adjustedTime > -500 then  -- Allow 500ms past the "now" line
+			local adjustedEntry = {
+				name = entry.name,
+				time = adjustedTime,
+				isAutoAttack = entry.isAutoAttack,
+				isOffGCD = entry.isOffGCD,
+				isMH = entry.isMH,
+				isOH = entry.isOH,
+			}
+
+			if entry.isAutoAttack then
+				table.insert(autoAttacks, adjustedEntry)
+			else
+				table.insert(abilities, adjustedEntry)
+			end
 		end
 	end
 
@@ -1192,6 +1253,14 @@ function ATW.UpdateTimeline()
 			iconFrame.offGCD:Show()
 		elseif iconFrame.offGCD then
 			iconFrame.offGCD:Hide()
+		end
+
+		-- Rage label (show predicted rage at this point)
+		if iconFrame.rageLabel and entry.rage then
+			iconFrame.rageLabel:SetText(string.format("%.0f", entry.rage))
+			iconFrame.rageLabel:Show()
+		elseif iconFrame.rageLabel then
+			iconFrame.rageLabel:Hide()
 		end
 
 		-- Draw connector line to axis

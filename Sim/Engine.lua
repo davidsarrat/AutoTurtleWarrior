@@ -3655,9 +3655,12 @@ function Engine.GetSimulationTimeline(maxSteps, timelineHorizon)
 	local state = Engine.CaptureCurrentState()
 	if not state then return {} end
 
-	-- Get best first action
+	-- Get best first action (may be nil if pooling/waiting)
 	local bestAction, bestDamage, results = Engine.GetBestAction()
-	if not bestAction then return {} end
+
+	-- Even if no ability is available, we should still show auto-attacks
+	-- This handles Execute phase when pooling rage, GCD lockout, etc.
+	local hasFirstAction = bestAction ~= nil and bestAction.name ~= "Wait"
 
 	-- Now simulate the best path and collect all actions + auto-attacks
 	local timeline = {}
@@ -3715,72 +3718,106 @@ function Engine.GetSimulationTimeline(maxSteps, timelineHorizon)
 		end
 	end
 
-	-- Add first action (the best one we just calculated)
-	table.insert(timeline, {
-		name = bestAction.name,
-		time = 0,
-		damage = Engine.GetActionDamage(simState, bestAction),
-		isStanceSwitch = bestAction.isStanceSwitch or false,
-		isOffGCD = bestAction.offGCD or false,
-		targetStance = bestAction.targetStance,
-		isAutoAttack = false,
-	})
+	-- Add first action (only if we have one)
+	if hasFirstAction then
+		table.insert(timeline, {
+			name = bestAction.name,
+			time = 0,
+			damage = Engine.GetActionDamage(simState, bestAction),
+			rage = simState.rage,  -- Current rage before action
+			isStanceSwitch = bestAction.isStanceSwitch or false,
+			isOffGCD = bestAction.offGCD or false,
+			targetStance = bestAction.targetStance,
+			isAutoAttack = false,
+		})
 
-	-- Apply first action
-	simState = Engine.ApplyAction(simState, bestAction)
+		-- Apply first action
+		simState = Engine.ApplyAction(simState, bestAction)
 
-	local actionTime = 0
-	if not bestAction.offGCD then
-		actionTime = gcd
-	else
-		actionTime = 100
+		local actionTime = 0
+		if not bestAction.offGCD then
+			actionTime = gcd
+		else
+			actionTime = 100
+		end
+		timeElapsed = timeElapsed + actionTime
 	end
-	timeElapsed = timeElapsed + actionTime
 
 	-- Continue with greedy simulation
+	-- KEY: When no ability available (pooling rage), still advance time and let rage accumulate
 	local steps = 1
+	local consecutiveWaits = 0  -- Prevent infinite loop if stuck
+	local MAX_CONSECUTIVE_WAITS = 10
+
 	while timeElapsed < timelineHorizon and steps < maxSteps do
 		local actions = Engine.GetValidActions(simState)
-		if not actions or table.getn(actions) == 0 then
-			break
-		end
 
 		-- Find best action (greedy by immediate damage)
 		local nextBest = nil
 		local nextBestDamage = -1
 
-		for _, action in ipairs(actions) do
-			if action.name ~= "Wait" then
-				local dmg = Engine.GetActionDamage(simState, action)
-				if dmg > nextBestDamage then
-					nextBestDamage = dmg
-					nextBest = action
+		if actions and table.getn(actions) > 0 then
+			for _, action in ipairs(actions) do
+				if action.name ~= "Wait" then
+					local dmg = Engine.GetActionDamage(simState, action)
+					if dmg > nextBestDamage then
+						nextBestDamage = dmg
+						nextBest = action
+					end
 				end
 			end
 		end
 
-		if not nextBest then
-			break
-		end
+		if nextBest then
+			-- Found a valid ability - add to timeline
+			consecutiveWaits = 0
 
-		-- Add to timeline
-		table.insert(timeline, {
-			name = nextBest.name,
-			time = timeElapsed,
-			damage = nextBestDamage,
-			isStanceSwitch = nextBest.isStanceSwitch or false,
-			isOffGCD = nextBest.offGCD or false,
-			targetStance = nextBest.targetStance,
-			isAutoAttack = false,
-		})
+			table.insert(timeline, {
+				name = nextBest.name,
+				time = timeElapsed,
+				damage = nextBestDamage,
+				rage = simState.rage,  -- Rage before this action
+				isStanceSwitch = nextBest.isStanceSwitch or false,
+				isOffGCD = nextBest.offGCD or false,
+				targetStance = nextBest.targetStance,
+				isAutoAttack = false,
+			})
 
-		-- Apply action
-		simState = Engine.ApplyAction(simState, nextBest)
+			-- Apply action
+			simState = Engine.ApplyAction(simState, nextBest)
 
-		if not nextBest.offGCD then
-			timeElapsed = timeElapsed + gcd
+			if not nextBest.offGCD then
+				timeElapsed = timeElapsed + gcd
+			else
+				timeElapsed = timeElapsed + 100
+			end
 		else
-			timeElapsed = timeElapsed + 100
+			-- No ability available - POOL: advance time and let rage accumulate
+			consecutiveWaits = consecutiveWaits + 1
+			if consecutiveWaits > MAX_CONSECUTIVE_WAITS then
+				break  -- Prevent infinite loop
+			end
+
+			-- Manually advance state by one GCD (simulating waiting/pooling)
+			-- This generates rage from auto-attacks
+			simState.time = (simState.time or 0) + gcd
+			timeElapsed = timeElapsed + gcd
+
+			-- Generate rage from auto-attacks while waiting
+			if simState.inMeleeRange then
+				local ragePerGCD = 15
+				if not simState.hasOH then
+					ragePerGCD = 10  -- Less rage with 2H
+				end
+				simState.rage = math.min(100, simState.rage + ragePerGCD)
+			end
+
+			-- Advance cooldowns while waiting
+			for cd, remaining in pairs(simState.cooldowns) do
+				if remaining > 0 then
+					simState.cooldowns[cd] = math.max(0, remaining - gcd)
+				end
+			end
 		end
 
 		steps = steps + 1
