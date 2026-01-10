@@ -389,9 +389,13 @@ end
 
 ---------------------------------------
 -- Get next recommended ability
--- Returns: abilityName, needsDance, targetStance, targetGUID
+-- Returns: abilityName, isStanceSwitch, targetStance, targetGUID
 -- 100% SIMULATION-BASED - Uses Engine.GetRecommendation()
 -- NO FALLBACK to legacy priority systems
+--
+-- Stance switches are now FIRST-CLASS ACTIONS:
+-- - isStanceSwitch=true means use CastShapeshiftForm(targetStance)
+-- - isStanceSwitch=false means cast the ability normally
 ---------------------------------------
 function ATW.GetNextAbility()
 	-- Engine simulation is REQUIRED - no fallback
@@ -400,7 +404,7 @@ function ATW.GetNextAbility()
 		return nil
 	end
 
-	local ok, abilityName, isOffGCD, pooling, timeToExecute, targetGUID, engineTargetStance = pcall(ATW.Engine.GetRecommendation)
+	local ok, abilityName, isOffGCD, pooling, timeToExecute, targetGUID, targetStance, isStanceSwitch = pcall(ATW.Engine.GetRecommendation)
 
 	if not ok then
 		ATW.Debug("ERROR: Engine.GetRecommendation failed: " .. tostring(abilityName))
@@ -412,40 +416,13 @@ function ATW.GetNextAbility()
 		return nil
 	end
 
-	-- Check if we need stance dance
-	local ability = ATW.Abilities[abilityName]
-	local needsDance = false
-	local targetStance = engineTargetStance  -- Use Engine's recommendation
-
-	if ability and ability.stance and ability.stance[1] ~= 0 then
-		local currentStance = ATW.Stance()
-		local validStance = false
-		for _, s in ipairs(ability.stance) do
-			if s == currentStance then
-				validStance = true
-				break
-			end
-		end
-		if not validStance then
-			needsDance = true
-			-- Use Engine's targetStance if provided, otherwise find one
-			if not targetStance then
-				for _, s in ipairs(ability.stance) do
-					if ATW.AvailableStances and ATW.AvailableStances[s] then
-						targetStance = s
-						break
-					end
-				end
-			end
-		end
-	end
-
 	-- Debug info about pooling
 	if pooling and AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
 		ATW.Debug("Pooling rage for Execute in " .. string.format("%.1f", timeToExecute or 0) .. "s")
 	end
 
-	return abilityName, needsDance, targetStance, targetGUID
+	-- Return action info - isStanceSwitch tells Rotation to use CastShapeshiftForm
+	return abilityName, isStanceSwitch, targetStance, targetGUID
 end
 
 ---------------------------------------

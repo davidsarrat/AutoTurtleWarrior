@@ -1,6 +1,17 @@
 --[[
 	Auto Turtle Warrior - Rotation/Rotation
-	DPR-based combat rotation using simulator
+	100% Simulation-based combat rotation
+
+	SIMULATION-BASED STANCE SYSTEM:
+	The simulator treats stance switches as explicit actions.
+	When a stance switch is recommended, we execute CastShapeshiftForm.
+	The next keypress will then get the actual ability.
+
+	This is the most simulation-based approach possible:
+	- Simulator decides EVERYTHING based on DPS calculations
+	- Berserker stance valued for +3% crit
+	- Battle stance valued for enabling Overpower, Charge, Rend
+	- No hardcoded "if wrong stance then switch" logic
 ]]--
 
 function ATW.Rotation()
@@ -95,48 +106,38 @@ function ATW.Rotation()
 
 	---------------------------------------
 	-- Simulator-Based Priority
+	-- The simulator returns either:
+	-- 1. A stance switch action (isStanceSwitch=true) -> CastShapeshiftForm
+	-- 2. An ability to cast -> execute normally
 	---------------------------------------
 
-	local abilityName, needsDance, targetStance, targetGUID = ATW.GetNextAbility()
+	local abilityName, isStanceSwitch, targetStance, targetGUID = ATW.GetNextAbility()
 
 	if not abilityName then
 		ATW.Debug("No ability available")
 		return
 	end
 
+	---------------------------------------
+	-- STANCE SWITCH ACTIONS
+	-- The simulator decided a stance switch is the best action
+	-- This is a first-class action, not a side effect
+	---------------------------------------
+	if isStanceSwitch and targetStance then
+		ATW.Debug("Stance -> " .. targetStance)
+		CastShapeshiftForm(targetStance)
+		return
+	end
+
+	---------------------------------------
+	-- ABILITY EXECUTION
+	-- Simulator decided this ability is best
+	-- We're already in the correct stance (simulator wouldn't pick otherwise)
+	---------------------------------------
 	local ability = ATW.Abilities[abilityName]
 	if not ability then
 		ATW.Debug("Unknown ability: " .. abilityName)
 		return
-	end
-
-	-- Handle stance dancing
-	if needsDance and targetStance then
-		if ATW.CanDance(rage) then
-			return ATW.GoStance(targetStance, abilityName)
-		else
-			ATW.Debug("Need more rage to dance for " .. abilityName)
-			return
-		end
-	end
-
-	-- Check stance requirement
-	if ability.stance and ability.stance[1] ~= 0 then
-		local validStance = false
-		for _, s in ipairs(ability.stance) do
-			if s == st then
-				validStance = true
-				break
-			end
-		end
-		if not validStance then
-			if ATW.CanDance(rage) then
-				return ATW.GoStance(ability.stance[1], abilityName)
-			else
-				ATW.Debug("Wrong stance for " .. abilityName)
-				return
-			end
-		end
 	end
 
 	-- Execute the ability
@@ -169,7 +170,6 @@ function ATW.Rotation()
 
 	-- GUID-based Rend (for spreading to specific targets)
 	-- ROBUST: UNIT_CASTEVENT confirms successful casts automatically
-	-- No pending entries needed - SuperWoW tells us when cast succeeds
 	elseif abilityName == "Rend" then
 		if targetGUID and ATW.Engine and ATW.Engine.CastRendOnGUID then
 			-- Use GUID targeting to Rend specific mob
@@ -177,10 +177,8 @@ function ATW.Rotation()
 			ATW.Engine.CastRendOnGUID(targetGUID)
 		else
 			-- Fallback: cast on current target
-			-- No pending needed - UNIT_CASTEVENT will confirm if cast succeeds
 			ATW.Cast(ability.name, true)
 		end
-		state.Dancing = true
 
 	elseif abilityName == "Charge" then
 		-- Verify distance (8-25 yards) and out of combat before executing
@@ -215,24 +213,21 @@ function ATW.Rotation()
 	elseif abilityName == "SweepingStrikes" then
 		-- Self-buff: use CastSelf to avoid inheriting spell target from nameplate
 		ATW.CastSelf(ability.name)
-		state.Dancing = true
+
 	elseif abilityName == "Whirlwind" then
 		ATW.Cast(ability.name, true)
-		state.Dancing = true
+
 	elseif abilityName == "Overpower" then
 		-- Use multi-target iteration: tries each nameplate until OP lands
 		-- Current target is tried first, then nameplates in melee range
 		if ATW.TryNextOverpower then
-			local attempted = ATW.TryNextOverpower()
-			if attempted then
-				state.Dancing = true
-			end
+			ATW.TryNextOverpower()
 		else
 			-- Fallback if iteration function not available
 			ATW.Cast(ability.name, true)
 			state.Overpower = nil
-			state.Dancing = true
 		end
+
 	elseif abilityName == "HeroicStrike" or abilityName == "Cleave" then
 		-- Swing queue ability - but MUST specify target GUID to reset spell target!
 		-- After casting Rend/OP on nameplate, SuperWoW keeps that as "spell target"
@@ -244,25 +239,14 @@ function ATW.Rotation()
 			CastSpellByName(ability.name)
 		end
 		ATW.OnSwingAbilityQueued(ability.name)
+
 	elseif abilityName == "Slam" then
 		-- Slam has cast time, use standard cast
 		ATW.Cast(ability.name, true)
+
 	else
 		-- Standard targeted ability
 		ATW.Cast(ability.name, true)
-	end
-
-	-- Return to primary stance after dancing (if not in middle of combo)
-	if state.Dancing and cfg.PrimaryStance ~= 0 then
-		local btReady = ATW.Talents.HasBT and ATW.Ready("Bloodthirst")
-		local wwReady = ATW.Ready("Whirlwind")
-		-- Only return if main abilities are on CD
-		if not btReady and not wwReady and st ~= cfg.PrimaryStance then
-			if state.LastStance + 1.5 <= GetTime() and ATW.CanDance(rage) then
-				ATW.GoStance(cfg.PrimaryStance, "Return")
-				state.Dancing = nil
-			end
-		end
 	end
 end
 

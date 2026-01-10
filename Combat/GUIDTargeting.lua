@@ -71,6 +71,9 @@ end
 ---------------------------------------
 -- Cast Execute on GUID (SuperWoW feature)
 -- Targets any mob in execute range
+--
+-- NOTE: Stance is handled by the simulator as a first-class action.
+-- This function assumes we're already in the correct stance.
 ---------------------------------------
 function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 	-- Always get current target GUID for explicit targeting
@@ -94,14 +97,6 @@ function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 			CastSpellByName("Execute")
 		end
 		return true
-	end
-
-	local currentStance = ATW.Stance and ATW.Stance() or 3
-
-	-- Need Battle or Berserker stance for Execute
-	if currentStance ~= 1 and currentStance ~= 3 then
-		CastShapeshiftForm(3)  -- Go to Berserker
-		return false  -- Will cast next frame
 	end
 
 	-- Check if guid is current target - still use explicit GUID!
@@ -188,8 +183,10 @@ end
 
 ---------------------------------------
 -- Get next Rend target (GUID-based)
--- Returns: guid, needsStanceDance
+-- Returns: guid
 -- For real-time rotation use (not simulation)
+--
+-- NOTE: Stance is handled by the simulator as a first-class action.
 ---------------------------------------
 function ATW.GUIDTargeting.GetNextRendTarget()
 	-- Get enemies in range
@@ -220,12 +217,10 @@ function ATW.GUIDTargeting.GetNextRendTarget()
 	end
 
 	if bestTarget then
-		local currentStance = ATW.Stance and ATW.Stance() or 3
-		local needsStance = (currentStance ~= 1 and currentStance ~= 2)
-		return bestTarget.guid, needsStance
+		return bestTarget.guid
 	end
 
-	return nil, false
+	return nil
 end
 
 ---------------------------------------
@@ -233,9 +228,11 @@ end
 -- Uses CastSpellByName with GUID targeting
 -- IMPORTANT: Verifies range (5yd) AND GCD before casting
 --
--- ROBUST DESIGN: No pending entries needed!
--- SuperWoW's UNIT_CASTEVENT will confirm the cast automatically
--- if it succeeds, eliminating the need for arbitrary timeouts.
+-- NOTE: Stance is handled by the simulator as a first-class action.
+-- This function assumes we're already in the correct stance.
+--
+-- ROBUST DESIGN: SuperWoW's UNIT_CASTEVENT will confirm the cast
+-- automatically if it succeeds.
 ---------------------------------------
 function ATW.GUIDTargeting.CastRendOnGUID(guid)
 	if not guid then return false end
@@ -260,18 +257,6 @@ function ATW.GUIDTargeting.CastRendOnGUID(guid)
 			return false  -- Out of range, don't attempt cast
 		end
 	end
-
-	local currentStance = ATW.Stance and ATW.Stance() or 3
-
-	-- Need Battle or Defensive stance for Rend
-	if currentStance ~= 1 and currentStance ~= 2 then
-		-- Switch to Battle Stance first
-		CastShapeshiftForm(1)
-		return false  -- Will cast next frame after stance switch
-	end
-
-	-- NO PENDING ENTRY - SuperWoW's UNIT_CASTEVENT will confirm if cast succeeds
-	-- This is more robust than tracking cast attempts with arbitrary timeouts
 
 	-- Check if casting on a different target than current
 	local _, currentTargetGUID = UnitExists("target")

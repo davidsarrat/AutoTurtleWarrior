@@ -112,7 +112,7 @@ The addon loads modules in a specific order defined in the `.toc` file:
 │   └──────┬───────────┘                                      │
 │          ↓                                                   │
 │   ┌──────────────────┐                                      │
-│   │ Execute Ability  │ → Stance dance if needed             │
+│   │ Execute Action   │ → Stance switch OR ability           │
 │   └──────────────────┘                                      │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -122,16 +122,34 @@ The addon loads modules in a specific order defined in the `.toc` file:
 ```
 ┌────────────────────┐     ┌─────────────────────┐     ┌────────────────┐
 │ CaptureCurrentState│ →   │ GetValidActions()   │ →   │ GetBestAction()│
-│ (full combat state)│     │ (hasSpell checks!)  │     │ (simulate 9s)  │
+│ (full combat state)│     │ (stance + abilities)│     │ (simulate 9s)  │
 └────────────────────┘     └─────────────────────┘     └────────────────┘
         ↑                          ↑                          ↑
         │                          │                          │
 ┌───────┴────────────┐     ┌───────┴───────────┐      ┌───────┴──────┐
-│ rage, stance, buffs│     │ Only LEARNED spells│      │ Sim each act │
-│ inCombat, distance │     │ Charge if OOC      │      │ 9s horizon   │
-│ enemies[], TTD     │     │ Slam if 2H only    │      │ Pick highest │
-└────────────────────┘     └───────────────────┘      └──────────────┘
+│ rage, stance, buffs│     │ STANCE SWITCHES:   │      │ Sim each act │
+│ inCombat, distance │     │  BerserkerStance   │      │ 9s horizon   │
+│ enemies[], TTD     │     │  BattleStance      │      │ Pick highest │
+└────────────────────┘     │ ABILITIES:         │      │ (incl stance)│
+                           │  Only in right     │      └──────────────┘
+                           │  stance + learned  │
+                           └───────────────────┘
 ```
+
+### Stance as First-Class Actions
+
+The simulator treats stance switches as **explicit actions** with their own DPS value:
+
+1. **BerserkerStance**: +3% crit on all attacks (valued by future damage)
+2. **BattleStance**: Enables Overpower, Charge, Rend, Sweeping Strikes
+3. **DefensiveStance**: Enables defensive abilities (rarely used for DPS)
+
+When the simulator calculates the best action:
+- It simulates 9 seconds ahead for each possible action
+- Stance switches do 0 direct damage but enable high-value abilities
+- The Berserker +3% crit bonus is captured in future ability damage
+
+This means the simulator **decides** when to switch stance based on DPS, not hardcoded rules.
 
 ## State Management
 
@@ -163,9 +181,7 @@ AutoTurtleWarrior_Config = {
 
 ```lua
 ATW.State = {
-    -- Stance Dancing
-    Dancing = nil,          -- Mid-stance dance
-    OldStance = nil,        -- Stance before dance
+    -- Stance State
     LastStance = 0,         -- Time of last stance change
 
     -- Combat Windows
@@ -177,6 +193,41 @@ ATW.State = {
     NeedsAARestore = nil,   -- GUID to restore AA to after nameplate cast
 }
 ```
+
+### Simulation-Based Stance System
+
+The simulator now handles stance switches as **first-class actions**:
+
+```lua
+-- In GetValidActions(), stance switches are generated like any other action:
+if stanceCdReady and stance ~= 3 then
+    table.insert(actions, {
+        name = "BerserkerStance",
+        targetStance = 3,
+        isStanceSwitch = true,
+        rage = 0,
+        rageLoss = math.max(0, rage - tm),  -- TM cap
+    })
+end
+```
+
+**Key Design:**
+- Stance switches are explicit actions the simulator can choose
+- Abilities are ONLY available when already in the correct stance
+- The simulator naturally values Berserker stance due to +3% crit on all attacks
+- No "pending ability" system needed - each keypress does ONE thing
+
+**Execution Flow:**
+```
+Keypress 1: Simulator says "BerserkerStance" → CastShapeshiftForm(3)
+Keypress 2: Simulator says "Bloodthirst" → CastSpellByName("Bloodthirst")
+```
+
+This is the most **simulation-based** approach possible:
+- The simulator decides EVERYTHING based on DPS calculations
+- No hardcoded "if wrong stance, switch" logic
+- Battle stance is valued for enabling Overpower, Charge, Rend
+- Berserker stance is valued for +3% crit bonus
 
 ### CastingTracker System (Combat/Interrupt.lua)
 

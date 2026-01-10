@@ -540,6 +540,11 @@ end
 function Engine.GetCritChance(state, isAbility)
 	local crit = state.crit or 20
 
+	-- Berserker Stance: +3% crit (CRITICAL for stance decision value)
+	if state.stance == 3 then
+		crit = crit + 3
+	end
+
 	-- Cruelty talent: +1/2/3/4/5% crit (if not already in base stats)
 	-- Note: This may already be included in state.crit from Stats module
 	-- Uncomment if not included:
@@ -2162,9 +2167,9 @@ end
 
 ---------------------------------------
 -- Get all valid actions from current state
--- Properly accounts for stance requirements and TM rage cap
--- ONLY includes abilities the player has actually learned
--- Respects GCD - only returns off-GCD abilities when GCD is active
+-- SIMULATION-BASED: Stance switches are explicit actions
+-- Abilities only available in correct stance
+-- Simulator decides EVERYTHING based on DPS calculations
 ---------------------------------------
 function Engine.GetValidActions(state)
 	local actions = {}
@@ -2178,25 +2183,47 @@ function Engine.GetValidActions(state)
 	-- Tactical Mastery: rage retained on stance switch
 	local tm = state.tacticalMastery or (ATW.Talents and ATW.Talents.TM) or 0
 
-	-- Helper: calculate available rage after potential stance switch
-	local function rageAfterSwitch(targetStance)
-		if targetStance == stance then
-			return rage  -- No switch needed
-		end
-		return math.min(rage, tm)  -- Capped by TM
-	end
+	-- Stance switch internal CD check
+	local stanceCdReady = (state.stanceGcdEnd or 0) <= 0
 
-	-- Helper: check if ability is usable (rage after switch >= cost)
-	local function canUse(targetStance, cost)
-		return rageAfterSwitch(targetStance) >= cost
-	end
-
-	-- Helper: check if in valid stance for ability
-	local function inStance(validStances)
-		for _, s in ipairs(validStances) do
-			if s == 0 or s == stance then return true end
+	---------------------------------------
+	-- STANCE SWITCH ACTIONS
+	-- These are explicit actions the simulator can choose
+	-- Value comes from enabling abilities + Berserker crit bonus
+	---------------------------------------
+	if stanceCdReady then
+		-- Berserker Stance (if not already in it)
+		if stance ~= 3 and ATW.AvailableStances and ATW.AvailableStances[3] then
+			table.insert(actions, {
+				name = "BerserkerStance",
+				targetStance = 3,
+				isStanceSwitch = true,
+				rage = 0,
+				rageLoss = math.max(0, rage - tm),
+			})
 		end
-		return false
+
+		-- Battle Stance (if not already in it)
+		if stance ~= 1 and ATW.AvailableStances and ATW.AvailableStances[1] then
+			table.insert(actions, {
+				name = "BattleStance",
+				targetStance = 1,
+				isStanceSwitch = true,
+				rage = 0,
+				rageLoss = math.max(0, rage - tm),
+			})
+		end
+
+		-- Defensive Stance (rarely used for DPS, but available)
+		if stance ~= 2 and ATW.AvailableStances and ATW.AvailableStances[2] then
+			table.insert(actions, {
+				name = "DefensiveStance",
+				targetStance = 2,
+				isStanceSwitch = true,
+				rage = 0,
+				rageLoss = math.max(0, rage - tm),
+			})
+		end
 	end
 
 	-- Helper: check if spell is learned (has rank > 0)
@@ -2262,107 +2289,71 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- CHARGE (Battle Stance, OUT OF COMBAT ONLY)
-	-- Must be used FIRST before any combat ability
-	-- Bloodrage triggers combat and blocks Charge!
-	-- Battle Shout does NOT trigger combat
+	-- CHARGE (Battle Stance ONLY, OUT OF COMBAT ONLY)
+	-- Simulator will recommend BattleStance first if needed
 	---------------------------------------
-	if hasSpell("Charge") and not state.inCombat then
-		-- Charge range: 8-25 yards
+	if hasSpell("Charge") and not state.inCombat and stance == 1 then
 		local inChargeRange = state.targetDistance and state.targetDistance >= 8 and state.targetDistance <= 25
 		local chargeReady = (state.cooldowns.Charge or 0) <= 0
 		if chargeReady and inChargeRange then
-			-- Charge generates rage: 9 base + Improved Charge talent (0/3/6)
-			-- ATW.Talents.ChargeRage stores the total (9 + talent bonus)
-			local chargeRage = 9
-			if ATW.Talents and ATW.Talents.ChargeRage then
-				chargeRage = ATW.Talents.ChargeRage
-			end
-			-- Charge requires Battle Stance
-			if stance == 1 then
-				table.insert(actions, {name = "Charge", stance = 1, rage = 0, needsDance = false, rageGain = chargeRage})
-			elseif canUse(1, 0) then
-				table.insert(actions, {name = "Charge", stance = 1, rage = 0, needsDance = true, rageGain = chargeRage})
-			end
+			local chargeRage = (ATW.Talents and ATW.Talents.ChargeRage) or 9
+			table.insert(actions, {name = "Charge", rage = 0, rageGain = chargeRage})
 		end
 	end
 
 	---------------------------------------
-	-- Execute (stance: Battle/Berserker, target < 20%)
+	-- Execute (Battle OR Berserker, target < 20%)
+	-- Available in both stances - simulator picks based on crit bonus
 	---------------------------------------
-	if inExecute and hasSpell("Execute") then
+	if inExecute and hasSpell("Execute") and (stance == 1 or stance == 3) then
 		local execCost = ATW.Talents and ATW.Talents.ExecCost or 15
-		-- In Battle or Berserker: can execute directly
-		if (stance == 1 or stance == 3) and rage >= execCost then
-			table.insert(actions, {name = "Execute", stance = stance, rage = execCost, needsDance = false})
-		-- In Defensive: need to dance to Berserker
-		elseif stance == 2 and canUse(3, execCost) then
-			table.insert(actions, {name = "Execute", stance = 3, rage = execCost, needsDance = true})
+		if rage >= execCost then
+			table.insert(actions, {name = "Execute", rage = execCost})
 		end
 	end
 
 	---------------------------------------
-	-- Bloodthirst (stance: Berserker only, 30 rage, 6s CD)
+	-- Bloodthirst (Berserker ONLY, 30 rage, 6s CD)
 	---------------------------------------
-	if ATW.Talents and ATW.Talents.HasBT then
+	if ATW.Talents and ATW.Talents.HasBT and stance == 3 then
 		local btCost = 30
 		local btReady = (state.cooldowns.Bloodthirst or 0) <= 0
-		if btReady then
-			if stance == 3 and rage >= btCost then
-				table.insert(actions, {name = "Bloodthirst", stance = 3, rage = btCost, needsDance = false})
-			elseif stance ~= 3 and canUse(3, btCost) then
-				table.insert(actions, {name = "Bloodthirst", stance = 3, rage = btCost, needsDance = true})
-			end
+		if btReady and rage >= btCost then
+			table.insert(actions, {name = "Bloodthirst", rage = btCost})
 		end
 	end
 
 	---------------------------------------
-	-- Mortal Strike (stance: Battle/Berserker, 30 rage, 6s CD)
-	-- Note: MS works in Berserker in TurtleWoW (verify this)
+	-- Mortal Strike (Battle OR Berserker, 30 rage, 6s CD)
+	-- TurtleWoW allows MS in Berserker stance
 	---------------------------------------
-	if ATW.Talents and ATW.Talents.HasMS then
+	if ATW.Talents and ATW.Talents.HasMS and (stance == 1 or stance == 3) then
 		local msCost = 30
 		local msReady = (state.cooldowns.MortalStrike or 0) <= 0
-		if msReady then
-			-- MS traditionally Battle stance only, but check Abilities.lua
-			if stance == 1 and rage >= msCost then
-				table.insert(actions, {name = "MortalStrike", stance = 1, rage = msCost, needsDance = false})
-			elseif stance == 3 and rage >= msCost then
-				-- Check if MS works in Berserker (TurtleWoW may allow this)
-				table.insert(actions, {name = "MortalStrike", stance = 3, rage = msCost, needsDance = false})
-			elseif stance == 2 and canUse(1, msCost) then
-				table.insert(actions, {name = "MortalStrike", stance = 1, rage = msCost, needsDance = true})
-			end
+		if msReady and rage >= msCost then
+			table.insert(actions, {name = "MortalStrike", rage = msCost})
 		end
 	end
 
 	---------------------------------------
-	-- Whirlwind (stance: Berserker only, 25 rage, 10s CD)
+	-- Whirlwind (Berserker ONLY, 25 rage, 10s CD)
 	---------------------------------------
-	if hasSpell("Whirlwind") then
+	if hasSpell("Whirlwind") and stance == 3 then
 		local wwCost = 25
 		local wwReady = (state.cooldowns.Whirlwind or 0) <= 0
-		if wwReady then
-			if stance == 3 and rage >= wwCost then
-				table.insert(actions, {name = "Whirlwind", stance = 3, rage = wwCost, needsDance = false})
-			elseif stance ~= 3 and canUse(3, wwCost) then
-				table.insert(actions, {name = "Whirlwind", stance = 3, rage = wwCost, needsDance = true})
-			end
+		if wwReady and rage >= wwCost then
+			table.insert(actions, {name = "Whirlwind", rage = wwCost})
 		end
 	end
 
 	---------------------------------------
-	-- Overpower (stance: Battle only, 5 rage, requires dodge proc)
+	-- Overpower (Battle ONLY, 5 rage, requires dodge proc)
 	---------------------------------------
-	if hasSpell("Overpower") and state.overpowerReady and state.overpowerEnd > 0 then
+	if hasSpell("Overpower") and state.overpowerReady and state.overpowerEnd > 0 and stance == 1 then
 		local opCost = 5
 		local opReady = (state.cooldowns.Overpower or 0) <= 0
-		if opReady then
-			if stance == 1 and rage >= opCost then
-				table.insert(actions, {name = "Overpower", stance = 1, rage = opCost, needsDance = false})
-			elseif stance ~= 1 and canUse(1, opCost) then
-				table.insert(actions, {name = "Overpower", stance = 1, rage = opCost, needsDance = true})
-			end
+		if opReady and rage >= opCost then
+			table.insert(actions, {name = "Overpower", rage = opCost})
 		end
 	end
 
@@ -2372,93 +2363,43 @@ function Engine.GetValidActions(state)
 	if hasSpell("BattleShout") and not state.hasBattleShout then
 		local bsCost = 10
 		if rage >= bsCost then
-			table.insert(actions, {name = "BattleShout", stance = stance, rage = bsCost, needsDance = false})
+			table.insert(actions, {name = "BattleShout", rage = bsCost})
 		end
 	end
 
 	---------------------------------------
-	-- MULTI-TARGET REND (stance: Battle/Defensive, 10 rage)
-	-- Generate Rend action for EACH enemy that needs it
-	-- SKIP if GCD is active (Rend is a GCD ability)
-	-- SKIP multi-target if RendSpread is disabled (single target only)
-	--
-	-- CONSERVATIVE THRESHOLDS:
-	-- Rend costs 10 rage + potential stance dance (10-25 rage loss from TM)
-	-- For Rend to be worth it, we need enough ticks to outvalue the cost:
-	-- - Without dance: ~4 ticks minimum (12s) to beat HS/Cleave value
-	-- - With dance: ~5 ticks minimum (15s) due to rage loss
-	-- These thresholds prevent Rend on mobs that will die too soon
+	-- REND (Battle OR Defensive ONLY, 10 rage)
+	-- Simulator will recommend BattleStance first if needed
+	-- CONSERVATIVE: Require 12s TTD for meaningful tick value
 	---------------------------------------
 	local rendCost = 10
-	local rendActionsAdded = {}  -- Track which targets we added Rend for
+	local MIN_REND_TTD = 12000  -- 12s = 4 ticks minimum
 
-	-- Minimum TTD thresholds (in ms)
-	local MIN_TTD_NO_DANCE = 12000   -- 12s = 4 ticks without stance dance
-	local MIN_TTD_WITH_DANCE = 15000 -- 15s = 5 ticks if we need to stance dance
-
-	-- Only iterate enemies if RendSpread is enabled (otherwise fall through to single-target)
-	if not gcdActive and hasSpell("Rend") and state.rendSpreadEnabled and state.enemies and table.getn(state.enemies) > 0 then
-		for _, enemy in ipairs(state.enemies) do
-			-- Skip bleed immune targets
-			if not enemy.bleedImmune and not enemy.inExecute then
-				-- Only if Rend not active or will expire before next GCD completes
-				-- Threshold = GCD duration, so we refresh if we won't have time after this action
-				if not enemy.hasRend or enemy.rendRemaining < Engine.GCD then
-					-- Use appropriate minimum based on whether we need to dance
-					local needsDance = not (stance == 1 or stance == 2)
-					local minTTD = needsDance and MIN_TTD_WITH_DANCE or MIN_TTD_NO_DANCE
-					if enemy.ttd >= minTTD then
-						-- Check melee range (5yd for Rend)
-						if enemy.distance <= 5 then
-							-- Add Rend action for this specific target
-							if (stance == 1 or stance == 2) and rage >= rendCost then
-								table.insert(actions, {
-									name = "Rend",
-									stance = stance,
-									rage = rendCost,
-									needsDance = false,
-									targetGUID = enemy.guid,
-									targetTTD = enemy.ttd,
-									targetHP = enemy.hpPercent,
-									isMainTarget = enemy.isTarget,
-								})
-								rendActionsAdded[enemy.guid] = true
-							elseif stance == 3 and canUse(1, rendCost) then
-								table.insert(actions, {
-									name = "Rend",
-									stance = 1,
-									rage = rendCost,
-									needsDance = true,
-									targetGUID = enemy.guid,
-									targetTTD = enemy.ttd,
-									targetHP = enemy.hpPercent,
-									isMainTarget = enemy.isTarget,
-								})
-								rendActionsAdded[enemy.guid] = true
-							end
+	if not gcdActive and hasSpell("Rend") and (stance == 1 or stance == 2) and rage >= rendCost then
+		-- Multi-target Rend spread
+		if state.rendSpreadEnabled and state.enemies and table.getn(state.enemies) > 0 then
+			for _, enemy in ipairs(state.enemies) do
+				if not enemy.bleedImmune and not enemy.inExecute then
+					if not enemy.hasRend or enemy.rendRemaining < Engine.GCD then
+						if enemy.ttd >= MIN_REND_TTD and enemy.distance <= 5 then
+							table.insert(actions, {
+								name = "Rend",
+								rage = rendCost,
+								targetGUID = enemy.guid,
+								targetTTD = enemy.ttd,
+								targetHP = enemy.hpPercent,
+								isMainTarget = enemy.isTarget,
+							})
 						end
 					end
 				end
 			end
-		end
-	elseif not gcdActive and hasSpell("Rend") then
-		-- Fallback: Single target mode (no enemy list available)
-		-- SKIP if GCD is active (Rend is a GCD ability)
-		if not state.targetBleedImmune and not inExecute then
-			if not state.rendOnTarget or state.rendRemaining < Engine.GCD then
-				-- Refresh if < 1 GCD remaining (won't have time after next action)
-				-- CONSERVATIVE: Require enough TTD for meaningful tick value
-				-- Same thresholds as multi-target spreading
-				local MIN_TTD_NO_DANCE = 12000   -- 12s = 4 ticks without stance dance
-				local MIN_TTD_WITH_DANCE = 15000 -- 15s = 5 ticks if we need to stance dance
-
-				if (stance == 1 or stance == 2) and rage >= rendCost then
-					if state.targetTTD >= MIN_TTD_NO_DANCE then
-						table.insert(actions, {name = "Rend", stance = stance, rage = rendCost, needsDance = false})
-					end
-				elseif stance == 3 and canUse(1, rendCost) then
-					if state.targetTTD >= MIN_TTD_WITH_DANCE then
-						table.insert(actions, {name = "Rend", stance = 1, rage = rendCost, needsDance = true})
+		else
+			-- Single target Rend
+			if not state.targetBleedImmune and not inExecute then
+				if not state.rendOnTarget or state.rendRemaining < Engine.GCD then
+					if state.targetTTD >= MIN_REND_TTD then
+						table.insert(actions, {name = "Rend", rage = rendCost})
 					end
 				end
 			end
@@ -2467,245 +2408,169 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- Slam (any stance, 15 rage, resets swing timer)
-	-- ONLY with 2H weapon (no offhand)
-	-- CRITICAL: Only use right after auto-attack (swing timer near full)
-	-- Using Slam mid-swing wastes swing progress (Zebouski approach)
+	-- ONLY with 2H weapon, only after auto landed
 	---------------------------------------
 	if hasSpell("Slam") and not state.hasOH then
 		local slamCost = 15
 		local slamReady = (state.cooldowns.Slam or 0) <= 0
 		if slamReady and rage >= slamCost then
-			-- Check swing timer - only Slam if we just landed an auto-attack
-			-- mhTimer is time REMAINING, mhSpeed is full swing duration
-			-- Slam is optimal when mhTimer >= mhSpeed * 0.9 (just after swing)
 			local mhTimer = state.mhTimer or 0
 			local mhSpeed = state.mhSpeed or 2500
-			local swingJustLanded = mhTimer >= (mhSpeed * 0.85)  -- Within 15% of full timer
-
+			local swingJustLanded = mhTimer >= (mhSpeed * 0.85)
 			if swingJustLanded then
-				table.insert(actions, {name = "Slam", stance = stance, rage = slamCost, needsDance = false})
+				table.insert(actions, {name = "Slam", rage = slamCost})
 			end
 		end
 	end
 
 	---------------------------------------
 	-- Heroic Strike (any stance, off-GCD)
-	-- NO THRESHOLD - let the simulation decide optimal rage management
-	-- The 6s lookahead naturally handles "save rage for BT" decisions
 	---------------------------------------
 	if hasSpell("HeroicStrike") then
 		local hsCost = ATW.GetHeroicStrikeCost and ATW.GetHeroicStrikeCost() or 15
-		-- Simple check: have rage and not already queued
-		-- The simulation compares HS damage vs saving rage for other abilities
 		if rage >= hsCost and not state.swingQueued then
-			table.insert(actions, {name = "HeroicStrike", stance = stance, rage = hsCost, needsDance = false, offGCD = true})
+			table.insert(actions, {name = "HeroicStrike", rage = hsCost, offGCD = true})
 		end
 	end
 
 	---------------------------------------
 	-- Cleave (any stance, off-GCD, 2+ targets)
-	-- NO THRESHOLD - let the simulation decide optimal rage management
 	---------------------------------------
 	if hasSpell("Cleave") then
 		local numMeleeTargets = state.enemyCountMelee or 1
 		local cleaveCost = 20
-		-- Simple check: 2+ targets, have rage, not already queued
 		if numMeleeTargets >= 2 and rage >= cleaveCost and not state.swingQueued then
-			table.insert(actions, {name = "Cleave", stance = stance, rage = cleaveCost, needsDance = false, offGCD = true})
+			table.insert(actions, {name = "Cleave", rage = cleaveCost, offGCD = true})
 		end
 	end
 
 	---------------------------------------
-	-- Bloodrage (any stance, OFF-GCD, generates rage)
-	-- Critical for rage generation at pull and during combat
-	-- IMPORTANT: Bloodrage ENTERS COMBAT - do NOT use if Charge is available!
+	-- Bloodrage (any stance, OFF-GCD)
+	-- Don't use if Charge is available (Bloodrage enters combat)
 	---------------------------------------
 	if hasSpell("Bloodrage") then
 		local bloodrageReady = (state.cooldowns.Bloodrage or 0) <= 0
 		if bloodrageReady and not state.hasBloodrageActive then
-			-- Check if Charge is available - if so, DON'T use Bloodrage (it blocks Charge)
 			local chargeBlocked = false
-			if hasSpell("Charge") and not state.inCombat then
+			if hasSpell("Charge") and not state.inCombat and stance == 1 then
 				local chargeReady = (state.cooldowns.Charge or 0) <= 0
 				local inChargeRange = state.targetDistance and state.targetDistance >= 8 and state.targetDistance <= 25
 				if chargeReady and inChargeRange then
-					chargeBlocked = true  -- Don't use Bloodrage, Charge is better!
+					chargeBlocked = true
 				end
 			end
 			if not chargeBlocked then
-				table.insert(actions, {name = "Bloodrage", stance = stance, rage = 0, needsDance = false, offGCD = true})
+				table.insert(actions, {name = "Bloodrage", rage = 0, offGCD = true})
 			end
 		end
 	end
 
 	---------------------------------------
-	-- Berserker Rage (Berserker only, OFF-GCD)
-	-- Fear break + rage from damage with Improved BR talent
+	-- Berserker Rage (Berserker ONLY, OFF-GCD)
 	---------------------------------------
-	if hasSpell("BerserkerRage") and ATW.Talents and ATW.Talents.HasIBR then
+	if hasSpell("BerserkerRage") and ATW.Talents and ATW.Talents.HasIBR and stance == 3 then
 		local brReady = (state.cooldowns.BerserkerRage or 0) <= 0
 		if brReady and not state.hasBerserkerRage then
-			if stance == 3 then
-				table.insert(actions, {name = "BerserkerRage", stance = 3, rage = 0, needsDance = false, offGCD = true})
-			elseif canUse(3, 0) then
-				-- Can dance to Berserker for this
-				table.insert(actions, {name = "BerserkerRage", stance = 3, rage = 0, needsDance = true, offGCD = true})
-			end
+			table.insert(actions, {name = "BerserkerRage", rage = 0, offGCD = true})
 		end
 	end
 
 	---------------------------------------
 	-- Death Wish (any stance, OFF-GCD, +20% damage)
-	-- Major DPS cooldown - controlled by Burst toggle
 	---------------------------------------
 	if ATW.IsCooldownAllowed("DeathWish") and ATW.Talents and ATW.Talents.HasDW then
 		local dwReady = (state.cooldowns.DeathWish or 0) <= 0
 		local dwCost = 10
 		if dwReady and not state.hasDeathWish and rage >= dwCost then
-			table.insert(actions, {name = "DeathWish", stance = stance, rage = dwCost, needsDance = false, offGCD = true})
+			table.insert(actions, {name = "DeathWish", rage = dwCost, offGCD = true})
 		end
 	end
 
 	---------------------------------------
-	-- Recklessness (Berserker only, OFF-GCD, +100% crit)
-	-- Major cooldown - controlled by Reckless toggle
+	-- Recklessness (Berserker ONLY, OFF-GCD, +100% crit)
 	---------------------------------------
-	if ATW.IsCooldownAllowed("Recklessness") and hasSpell("Recklessness") and ATW.AvailableStances and ATW.AvailableStances[3] then
+	if ATW.IsCooldownAllowed("Recklessness") and hasSpell("Recklessness") and stance == 3 then
 		local reckReady = (state.cooldowns.Recklessness or 0) <= 0
 		if reckReady and not state.hasRecklessness then
-			if stance == 3 then
-				table.insert(actions, {name = "Recklessness", stance = 3, rage = 0, needsDance = false, offGCD = true})
-			-- Don't dance just for Recklessness - it's a long CD
-			end
+			table.insert(actions, {name = "Recklessness", rage = 0, offGCD = true})
 		end
 	end
 
 	---------------------------------------
-	-- RACIAL ABILITIES (TurtleWoW)
-	-- Controlled by Burst toggle
+	-- RACIAL ABILITIES (any stance, OFF-GCD)
 	-- CD Sync: If enabled, racials wait for Death Wish
 	---------------------------------------
-
-	-- Helper: check if we should wait for Death Wish sync
 	local function shouldWaitForDWSync()
-		-- Check if sync is enabled
 		local syncEnabled = AutoTurtleWarrior_Config.SyncCooldowns
-		if syncEnabled == nil then syncEnabled = true end  -- Default to enabled
+		if syncEnabled == nil then syncEnabled = true end
 		if not syncEnabled then return false end
-
-		-- Only sync if we have Death Wish
 		if not ATW.Has or not ATW.Has.DeathWish then return false end
-
-		-- Check Death Wish cooldown
 		local dwCD = state.cooldowns and state.cooldowns.DeathWish or 999999
-
-		-- If DW is ready (CD <= 0), no need to wait - use together!
 		if dwCD <= 0 then return false end
-
-		-- If DW is coming soon (< 10s), wait for sync
-		if dwCD > 0 and dwCD <= 10000 then
-			return true
-		end
-
+		if dwCD > 0 and dwCD <= 10000 then return true end
 		return false
 	end
 
 	local waitingForDW = shouldWaitForDWSync()
 
-	-- Blood Fury (Orc): +AP = level*2, OFF-GCD, 2min CD
+	-- Blood Fury (Orc)
 	if ATW.IsCooldownAllowed("BloodFury") and ATW.Racials and ATW.Racials.HasBloodFury then
 		local bfReady = (state.cooldowns.BloodFury or 0) <= 0
 		if bfReady and not state.hasBloodFury and not waitingForDW then
-			-- Blood Fury is off-GCD in TurtleWoW, usable in any stance
-			table.insert(actions, {name = "BloodFury", stance = stance, rage = 0, needsDance = false, offGCD = true})
+			table.insert(actions, {name = "BloodFury", rage = 0, offGCD = true})
 		end
 	end
 
-	-- Berserking (Troll): 10-15% haste, costs 5 rage, 3min CD
+	-- Berserking (Troll)
 	if ATW.IsCooldownAllowed("Berserking") and ATW.Racials and ATW.Racials.HasBerserking then
 		local berserkReady = (state.cooldowns.Berserking or 0) <= 0
 		local berserkCost = 5
 		if berserkReady and not state.hasBerserking and rage >= berserkCost and not waitingForDW then
-			table.insert(actions, {name = "Berserking", stance = stance, rage = berserkCost, needsDance = false, offGCD = false})
+			table.insert(actions, {name = "Berserking", rage = berserkCost, offGCD = false})
 		end
 	end
 
-	-- Perception (Human): +2% crit for 20s, OFF-GCD, 3min CD
+	-- Perception (Human)
 	if ATW.IsCooldownAllowed("Perception") and ATW.Racials and ATW.Racials.HasPerception then
 		local percReady = (state.cooldowns.Perception or 0) <= 0
 		if percReady and not state.hasPerception and not waitingForDW then
-			table.insert(actions, {name = "Perception", stance = stance, rage = 0, needsDance = false, offGCD = true})
+			table.insert(actions, {name = "Perception", rage = 0, offGCD = true})
 		end
 	end
 
 	---------------------------------------
-	-- Sweeping Strikes (Battle only, 2+ targets)
-	-- AoE damage buff - next 5 attacks hit additional target
+	-- Sweeping Strikes (Battle ONLY, 2+ targets)
 	---------------------------------------
 	local numMeleeTargets = state.enemyCountMelee or 1
-	if hasSpell("SweepingStrikes") and numMeleeTargets >= 2 then
+	if hasSpell("SweepingStrikes") and numMeleeTargets >= 2 and stance == 1 then
 		local ssReady = (state.cooldowns.SweepingStrikes or 0) <= 0
 		local ssCost = 30
-		if ssReady and not state.hasSweepingStrikes then
-			if stance == 1 and rage >= ssCost then
-				table.insert(actions, {name = "SweepingStrikes", stance = 1, rage = ssCost, needsDance = false})
-			elseif stance ~= 1 and canUse(1, ssCost) then
-				table.insert(actions, {name = "SweepingStrikes", stance = 1, rage = ssCost, needsDance = true})
-			end
+		if ssReady and not state.hasSweepingStrikes and rage >= ssCost then
+			table.insert(actions, {name = "SweepingStrikes", rage = ssCost})
 		end
 	end
 
 	---------------------------------------
-	-- Pummel (Battle/Berserker, OFF-GCD interrupt)
-	-- ONLY suggested when interrupt is needed (not in normal rotation)
-	-- Controlled by PummelEnabled toggle
+	-- Pummel (Battle OR Berserker, OFF-GCD interrupt)
 	---------------------------------------
 	if AutoTurtleWarrior_Config.PummelEnabled and hasSpell("Pummel") and state.shouldInterrupt then
 		local pummelReady = (state.cooldowns.Pummel or 0) <= 0
 		local pummelCost = 10
-		if pummelReady and rage >= pummelCost then
-			if stance == 1 or stance == 3 then
-				table.insert(actions, {
-					name = "Pummel",
-					stance = stance,
-					rage = pummelCost,
-					needsDance = false,
-					offGCD = true,
-					isInterrupt = true,  -- Mark as interrupt action
-					targetGUID = state.interruptTargetGUID,  -- GUID to interrupt
-				})
-			elseif canUse(3, pummelCost) then
-				table.insert(actions, {
-					name = "Pummel",
-					stance = 3,
-					rage = pummelCost,
-					needsDance = true,
-					offGCD = true,
-					isInterrupt = true,
-					targetGUID = state.interruptTargetGUID,
-				})
-			end
+		if pummelReady and rage >= pummelCost and (stance == 1 or stance == 3) then
+			table.insert(actions, {
+				name = "Pummel",
+				rage = pummelCost,
+				offGCD = true,
+				isInterrupt = true,
+				targetGUID = state.interruptTargetGUID,
+			})
 		end
 	end
 
 	---------------------------------------
 	-- Wait (always valid - for rage pooling)
 	---------------------------------------
-	table.insert(actions, {name = "Wait", stance = stance, rage = 0, needsDance = false})
-
-	---------------------------------------
-	-- Filter out needsDance actions if stance GCD is active
-	-- Can't switch stances until the 1.5s internal CD is over
-	---------------------------------------
-	if state.stanceGcdEnd and state.stanceGcdEnd > 0 then
-		local filteredActions = {}
-		for _, action in ipairs(actions) do
-			if not action.needsDance then
-				table.insert(filteredActions, action)
-			end
-		end
-		return filteredActions
-	end
+	table.insert(actions, {name = "Wait", rage = 0})
 
 	return actions
 end
@@ -2715,6 +2580,12 @@ end
 -- Returns expected damage (includes crit expectation)
 ---------------------------------------
 function Engine.GetActionDamage(state, action)
+	-- Stance switches do 0 direct damage
+	-- Their value comes from enabling future actions (captured by horizon simulation)
+	if action.isStanceSwitch then
+		return 0
+	end
+
 	local ap = state.ap or 1000
 
 	-- If Battle Shout is active, add its AP
@@ -2722,16 +2593,13 @@ function Engine.GetActionDamage(state, action)
 		ap = ap + (ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or 232)
 	end
 
-	-- Calculate effective crit chance based on RESULTING stance
-	-- Berserker Stance: +3% crit
-	-- Battle/Defensive: no modifier
+	-- Crit chance already includes stance bonus via GetCritChance()
 	local baseCrit = state.crit or 20
-	local stanceAfterAction = action.needsDance and action.stance or state.stance
-	local stanceCritBonus = 0
-	if stanceAfterAction == 3 then  -- Berserker
-		stanceCritBonus = 3
+	-- Add Berserker bonus (GetCritChance does this too, but for consistency in damage calc)
+	if state.stance == 3 then
+		baseCrit = baseCrit + 3
 	end
-	local effectiveCrit = baseCrit + stanceCritBonus
+	local effectiveCrit = baseCrit
 
 	-- Crit multiplier from Impale talent (10/20% bonus crit damage)
 	-- Base crit = 2x damage, with Impale = 2.1x or 2.2x
@@ -2748,12 +2616,7 @@ function Engine.GetActionDamage(state, action)
 	if action.name == "Execute" then
 		local base = ATW.GetExecuteBase and ATW.GetExecuteBase() or 600
 		local coeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or 15
-		-- Execute uses rage BEFORE TM cap if dancing
 		local availableRage = state.rage
-		if action.needsDance then
-			local tm = state.tacticalMastery or 0
-			availableRage = math.min(state.rage, tm)
-		end
 		local execCost = ATW.Talents and ATW.Talents.ExecCost or 15
 		local excess = math.max(0, availableRage - execCost)
 		damage = base + (excess * coeff)
@@ -3000,19 +2863,26 @@ function Engine.ApplyAction(state, action)
 	local newState = Engine.DeepCopyState(state)
 	local gcd = Engine.DECISION_GCD
 
-	-- STANCE SWITCH FIRST (if needed)
-	-- In vanilla, stance switch happens BEFORE ability cast
-	-- Rage is capped by Tactical Mastery on switch
-	if action.needsDance then
+	---------------------------------------
+	-- STANCE SWITCH ACTIONS (explicit actions now)
+	---------------------------------------
+	if action.isStanceSwitch then
 		local tm = newState.tacticalMastery or 0
-		-- Cap rage at TM value
+		-- TM cap: lose rage above TM when switching
 		if newState.rage > tm then
 			newState.rage = tm
 		end
-		newState.stance = action.stance
+		-- Change stance
+		newState.stance = action.targetStance
+		-- Stance internal CD (1.5s)
+		newState.stanceGcdEnd = 1500
+		-- Stance switch does NOT consume ability GCD
+		-- But it counts as a "decision" - advance time slightly to prevent infinite loops
+		newState.time = (newState.time or 0) + 100  -- 0.1s token advance
+		return newState
 	end
 
-	-- THEN pay rage cost (after potential TM cap)
+	-- Pay rage cost
 	newState.rage = newState.rage - action.rage
 
 	-- Apply ability-specific effects
@@ -3310,7 +3180,6 @@ function Engine.GetBestAction()
 				local results = {{
 					name = action.name,
 					damage = 999999,
-					needsDance = action.needsDance,
 					targetGUID = action.targetGUID,
 					interrupt = true,
 				}}
@@ -3350,7 +3219,7 @@ function Engine.GetBestAction()
 		table.insert(results, {
 			name = action.name,
 			damage = totalDamage,
-			needsDance = action.needsDance,
+			isStanceSwitch = action.isStanceSwitch,
 			targetGUID = action.targetGUID,
 			targetHP = action.targetHP,
 		})
@@ -3385,20 +3254,18 @@ function Engine.GetRecommendationSimBased()
 	local bestAction, bestDamage, results = Engine.GetBestAction()
 
 	if not bestAction or bestAction.name == "Wait" then
-		return nil, false, false, 0, nil, nil
-	end
-
-	local targetStance = nil
-	if bestAction.needsDance then
-		targetStance = bestAction.stance
+		return nil, false, false, 0, nil, nil, false
 	end
 
 	-- For multi-target Rend, return the specific targetGUID
 	local targetGUID = bestAction.targetGUID or nil
 
+	-- Stance switch actions have targetStance set
+	local targetStance = bestAction.targetStance or nil
+
 	-- Return INTERNAL name (e.g., "BattleShout" not "Battle Shout")
-	-- The Rotation.lua looks up ATW.Abilities[abilityName] which uses internal names
-	return bestAction.name, bestAction.offGCD or false, false, 0, targetGUID, targetStance
+	-- isStanceSwitch tells Rotation.lua to use CastShapeshiftForm instead
+	return bestAction.name, bestAction.offGCD or false, false, 0, targetGUID, targetStance, bestAction.isStanceSwitch or false
 end
 
 ---------------------------------------
@@ -3420,9 +3287,9 @@ function Engine.PrintDecisionDebug()
 		if bestAction and r.name == bestAction.name then
 			marker = " |cff00ff00<< BEST|r"
 		end
-		local danceStr = r.needsDance and " (dance)" or ""
+		local stanceStr = r.isStanceSwitch and " (stance)" or ""
 		local targetStr = r.targetGUID and " [GUID]" or ""
-		ATW.Print("  " .. r.name .. danceStr .. targetStr .. ": " ..
+		ATW.Print("  " .. r.name .. stanceStr .. targetStr .. ": " ..
 			string.format("%.0f", r.damage) .. " dmg" .. marker)
 	end
 

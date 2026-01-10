@@ -353,11 +353,11 @@ local function GetAbilityInfo()
 
 	-- Fallback to simulator
 	if ATW.GetNextAbility then
-		local abilityName, needsDance, targetStance, targetGUID = ATW.GetNextAbility()
+		local abilityName, isStanceSwitch, targetStance, targetGUID = ATW.GetNextAbility()
 		if abilityName then
 			return {
 				name = abilityName,
-				needsDance = needsDance,
+				isStanceSwitch = isStanceSwitch,
 				targetStance = targetStance,
 				targetGUID = targetGUID,
 			}
@@ -381,8 +381,8 @@ local function GetAbilityReason(info)
 		return "Pooling for Execute (" .. string.format("%.0f", info.timeToExec) .. "s)"
 	end
 
-	-- Stance dance needed
-	if info.needsDance or info.targetStance then
+	-- Stance switch action
+	if info.isStanceSwitch and info.targetStance then
 		local stanceNames = {[1] = "Battle", [2] = "Defensive", [3] = "Berserker"}
 		local stanceName = stanceNames[info.targetStance] or "?"
 		return "Switch to " .. stanceName .. " Stance"
@@ -533,7 +533,7 @@ function ATW.UpdateDisplay()
 		elements.icon.border:SetVertexColor(colors.execute[1], colors.execute[2], colors.execute[3], 1)
 	elseif abilityInfo and abilityInfo.pooling then
 		elements.icon.border:SetVertexColor(colors.pooling[1], colors.pooling[2], colors.pooling[3], 1)
-	elseif abilityInfo and (abilityInfo.needsDance or abilityInfo.targetStance) then
+	elseif abilityInfo and abilityInfo.isStanceSwitch then
 		elements.icon.border:SetVertexColor(colors.stanceDance[1], colors.stanceDance[2], colors.stanceDance[3], 1)
 	else
 		elements.icon.border:SetVertexColor(1, 1, 1, 0.8)
@@ -578,8 +578,8 @@ function ATW.UpdateDisplay()
 		badge = "|cffff3333EXECUTE|r"
 	elseif abilityInfo and abilityInfo.pooling then
 		badge = "|cffff9900POOLING|r"
-	elseif abilityInfo and abilityInfo.needsDance then
-		badge = "|cffffff00DANCE|r"
+	elseif abilityInfo and abilityInfo.isStanceSwitch then
+		badge = "|cffffff00STANCE|r"
 	end
 	elements.stateBadge:SetText(badge)
 
