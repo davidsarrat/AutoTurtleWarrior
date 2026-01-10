@@ -229,6 +229,15 @@ function ATW.Rotation()
 		end
 
 	elseif abilityName == "HeroicStrike" or abilityName == "Cleave" then
+		-- CRITICAL: Check if already queued - calling again would TOGGLE (cancel) it!
+		-- This is a failsafe in case the simulator cache didn't update fast enough
+		local currentlyQueued = ATW.GetQueuedSwing and ATW.GetQueuedSwing()
+		if currentlyQueued then
+			-- Already queued, don't call again or it will cancel
+			ATW.Debug("HS/Cleave already queued, skipping")
+			return
+		end
+
 		-- Swing queue ability - but MUST specify target GUID to reset spell target!
 		-- After casting Rend/OP on nameplate, SuperWoW keeps that as "spell target"
 		-- We need to explicitly set target GUID to ensure HS/Cleave go to current target

@@ -1809,6 +1809,11 @@ function Engine.CacheValid(newState)
 		return false
 	end
 
+	-- Swing queue state changed (HS/Cleave toggle prevention)
+	if (oldState.swingQueued or nil) ~= (newState.swingQueued or nil) then
+		return false
+	end
+
 	-- Enemy count changed
 	if (oldState.enemyCount or 1) ~= (newState.enemyCount or 1) then
 		return false
@@ -2214,16 +2219,12 @@ function Engine.GetValidActions(state)
 			})
 		end
 
-		-- Defensive Stance (rarely used for DPS, but available)
-		if stance ~= 2 and ATW.AvailableStances and ATW.AvailableStances[2] then
-			table.insert(actions, {
-				name = "DefensiveStance",
-				targetStance = 2,
-				isStanceSwitch = true,
-				rage = 0,
-				rageLoss = math.max(0, rage - tm),
-			})
-		end
+		-- Defensive Stance: NEVER recommended for DPS rotation
+		-- Only Battle (for Overpower/Charge/Rend) and Berserker (for BT/WW/+3% crit) matter
+		-- Keeping this commented out to document why it's excluded:
+		-- if stance ~= 2 and ATW.AvailableStances and ATW.AvailableStances[2] then
+		--     table.insert(actions, { name = "DefensiveStance", ... })
+		-- end
 	end
 
 	-- Helper: check if spell is learned (has rank > 0)
@@ -2867,7 +2868,8 @@ function Engine.ApplyAction(state, action)
 	-- STANCE SWITCH ACTIONS (explicit actions now)
 	---------------------------------------
 	if action.isStanceSwitch then
-		local tm = newState.tacticalMastery or 0
+		-- Tactical Mastery: rage retained on stance switch (0/5/10/15/20/25)
+		local tm = newState.tacticalMastery or (ATW.Talents and ATW.Talents.TM) or 0
 		-- TM cap: lose rage above TM when switching
 		if newState.rage > tm then
 			newState.rage = tm
@@ -3018,6 +3020,19 @@ function Engine.ApplyAction(state, action)
 			stacks = 1,
 		}
 		-- Crit bonus applied through GetCritChance()
+
+	---------------------------------------
+	-- SWING QUEUE ABILITIES (HS/Cleave)
+	-- These queue on next melee swing, not instant damage
+	---------------------------------------
+	elseif action.name == "HeroicStrike" then
+		newState.swingQueued = "hs"
+		-- Note: Rage is paid when queued (already subtracted above)
+		-- Damage happens when swing lands (handled by ProcessAutoAttack)
+
+	elseif action.name == "Cleave" then
+		newState.swingQueued = "cleave"
+		-- Note: Rage is paid when queued (already subtracted above)
 	end
 
 	-- Consume Sweeping Strikes charge for melee abilities (not WW/Cleave/Rend)
@@ -3117,6 +3132,15 @@ function Engine.SimulateDecisionHorizon(state, firstAction, horizon)
 	totalDamage = totalDamage + damage
 	simState = Engine.ApplyAction(simState, firstAction)
 
+	---------------------------------------
+	-- CRITICAL: Include auto-attack damage over horizon
+	-- This is calculated AFTER applying the first action so that
+	-- HeroicStrike/Cleave queueing is properly reflected in swingQueued
+	-- This ensures HS/Cleave actions are properly valued vs other abilities
+	---------------------------------------
+	local autoDamage = Engine.EstimateAutoAttackDamage(simState, horizon)
+	totalDamage = totalDamage + autoDamage
+
 	if not firstAction.offGCD then
 		timeElapsed = timeElapsed + gcd
 	end
@@ -3155,6 +3179,85 @@ function Engine.SimulateDecisionHorizon(state, firstAction, horizon)
 	end
 
 	return totalDamage
+end
+
+---------------------------------------
+-- Estimate auto-attack damage over a time horizon
+-- Includes HS/Cleave bonus if queued
+-- This is used by SimulateDecisionHorizon to properly value queued swings
+---------------------------------------
+function Engine.EstimateAutoAttackDamage(state, horizon)
+	local damage = 0
+
+	-- Safety checks for nil values
+	local mhDmgMin = state.mhDmgMin or 100
+	local mhDmgMax = state.mhDmgMax or 200
+	local ohDmgMin = state.ohDmgMin or 50
+	local ohDmgMax = state.ohDmgMax or 100
+	local mhSpeedMs = state.mhSpeed or 2600
+	local ohSpeedMs = state.ohSpeed or 2600
+
+	-- Average weapon damage
+	local mhAvg = (mhDmgMin + mhDmgMax) / 2
+	local ohAvg = state.hasOH and ((ohDmgMin + ohDmgMax) / 2) or 0
+
+	-- Swing speed with haste (convert ms to seconds for calculation)
+	local hasteMod = Engine.GetHasteMod(state) or 1
+	if hasteMod <= 0 then hasteMod = 1 end  -- Prevent division by zero
+	local mhSpeed = mhSpeedMs / hasteMod  -- Still in ms
+	local ohSpeed = state.hasOH and (ohSpeedMs / hasteMod) or 999999
+
+	-- Damage modifiers
+	local damageMod = Engine.GetDamageMod(state) or 1
+
+	-- Crit calculation
+	local critChance = (Engine.GetCritChance(state, nil) or 20) / 100
+	local impale = ATW.Talents and ATW.Talents.Impale or 0
+	local critMod = 2.0 + (impale / 100)
+	local critMultiplier = 1 + (critChance * (critMod - 1))
+
+	-- Number of MH swings in horizon (horizon is in ms, mhSpeed is in ms)
+	local mhSwings = 0
+	if mhSpeed > 0 then
+		mhSwings = math.floor(horizon / mhSpeed)
+	end
+	if mhSwings < 1 then mhSwings = 1 end  -- At least 1 swing
+
+	-- Number of OH swings in horizon (if dual-wield)
+	local ohSwings = 0
+	if state.hasOH and ohSpeed > 0 then
+		ohSwings = math.floor(horizon / ohSpeed)
+	end
+
+	-- Base auto-attack damage
+	local mhDamage = mhAvg * damageMod * critMultiplier * mhSwings
+	local ohDamage = ohAvg * damageMod * critMultiplier * ohSwings * 0.5  -- OH does 50% damage
+
+	damage = mhDamage + ohDamage
+
+	-- CRITICAL: Add HS/Cleave bonus if queued (only for FIRST swing)
+	-- This is what was missing - the extra damage from queued swing ability
+	if state.swingQueued then
+		local swingBonus = 0
+
+		if state.swingQueued == "hs" then
+			swingBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS or 157
+		elseif state.swingQueued == "cleave" then
+			swingBonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or Engine.CLEAVE_BONUS or 50
+			-- Cleave hits 2 targets
+			local enemyCount = state.enemyCountMelee or state.enemyCount or 1
+			if enemyCount >= 2 then
+				swingBonus = swingBonus * 2
+			end
+		end
+
+		-- Add bonus damage with crit chance (HS/Cleave can crit)
+		local hsCritChance = (Engine.GetCritChance(state, "HeroicStrike") or 20) / 100
+		local hsCritMult = 1 + (hsCritChance * (critMod - 1))
+		damage = damage + (swingBonus * damageMod * hsCritMult)
+	end
+
+	return damage
 end
 
 ---------------------------------------
