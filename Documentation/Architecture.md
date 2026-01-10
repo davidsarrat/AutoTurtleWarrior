@@ -43,34 +43,98 @@ ATW = {
 The addon loads modules in a specific order defined in the `.toc` file:
 
 ```
+# Core
 1. Core/Init.lua           - Creates ATW table, defaults, state
 2. Core/Helpers.lua        - Utility functions (buffs, debuffs, HP)
 
+# Player
 3. Player/Stats.lua        - Player statistics gathering
 4. Player/TTD.lua          - Time To Die calculation
 5. Player/Gear.lua         - Weapon detection
 6. Player/Talents.lua      - Talent and spell detection
 
+# Combat
 7. Combat/Stance.lua       - Stance detection and switching
 8. Combat/Casting.lua      - Spell casting helpers
 9. Combat/SwingTimer.lua   - Swing timer tracking
 10. Combat/GUIDTargeting.lua - GUID-based casting
+11. Combat/Interrupt.lua   - CastingTracker + auto-Pummel
 
-11. Detection/Distance.lua    - Range calculations (SuperWoW)
-12. Detection/CreatureType.lua - Bleed immunity detection
-13. Detection/AoE.lua         - Enemy counting, Rend tracking
+# Detection
+12. Detection/Distance.lua    - Range calculations (SuperWoW)
+13. Detection/CreatureType.lua - Bleed immunity detection
+14. Detection/AoE.lua         - Enemy counting, Rend tracking
 
-14. Sim/Abilities.lua     - Ability definitions and data
-15. Sim/RageModel.lua     - Rage generation formulas
-16. Sim/Engine.lua        - Combat simulation engine
-17. Sim/Simulator.lua     - Time-based simulation runner
+# Simulation (load before Rotation)
+15. Sim/Abilities.lua     - Ability definitions and damage formulas
+16. Sim/RageModel.lua     - Rage generation formulas (Zebouski)
+17. Sim/Strategic.lua     - Cooldown synergy planning
+18. Sim/Engine.lua        - Combat simulation engine (3400+ lines)
+19. Sim/Simulator.lua     - Cooldown toggles, GetNextAbility wrapper
 
-18. Rotation/Rotation.lua  - Main rotation logic
+# Rotation
+20. Rotation/Rotation.lua  - Main rotation execution logic
 
-19. UI/Display.lua         - Visual interface
+# UI
+21. UI/Display.lua         - Visual display frame
 
-20. Commands/SlashCommands.lua - Chat commands
-21. Commands/Events.lua        - Event registration (loads last)
+# Commands
+22. Commands/SlashCommands.lua - Chat commands (/atw)
+23. Commands/Events.lua        - Event registration (loads last)
+```
+
+## File Size Analysis
+
+| File | Lines | Status |
+|------|-------|--------|
+| Sim/Engine.lua | ~3450 | Large - contains full simulation |
+| Sim/Simulator.lua | ~1470 | Mixed - toggles + legacy code |
+| Rotation/Rotation.lua | ~450 | Good |
+| UI/Display.lua | ~400 | Good |
+| Other files | <300 each | Good |
+
+### Engine.lua Subsystems
+
+The largest file contains these distinct subsystems:
+
+```
+Engine.lua (3450 lines):
+├── Constants & Configuration (~100)
+├── State Management
+│   ├── CreateState (~155)
+│   ├── InitPlayer (~135)
+│   ├── InitTargets (~70)
+│   ├── CaptureCurrentState (~310)
+│   └── DeepCopyState (~25)
+├── Combat Calculations
+│   ├── GetDamageMod (~20)
+│   ├── GetCritChance (~35)
+│   ├── GetEffectiveAP (~25)
+│   ├── GetHasteMod (~30)
+│   ├── RollWeaponDamage (~25)
+│   └── ProcessHit (~50)
+├── Combat Processing
+│   ├── ProcessAutoAttack (~90)
+│   ├── ProcessDoTs (~35)
+│   ├── ApplyDeepWounds (~20)
+│   ├── ApplyRend (~25)
+│   └── ProcessSweepingStrikes (~35)
+├── Ability System
+│   ├── CanUseAbility (~55)
+│   ├── UseAbility (~170)
+│   └── ChooseAbility (~35)
+├── HS/Cleave Cancel Logic (~105)
+├── Main Simulation Loop (~90)
+├── Action System
+│   ├── GetValidActions (~405)
+│   ├── GetActionDamage (~280)
+│   └── ApplyAction (~260)
+├── Decision System
+│   ├── CacheValid (~70)
+│   ├── SimulateDecisionHorizon (~55)
+│   ├── EstimateAutoAttackDamage (~100)
+│   └── GetBestAction (~85)
+└── Debug & Utilities (~200)
 ```
 
 ## Event Flow
@@ -142,12 +206,15 @@ The simulator treats stance switches as **explicit actions** with their own DPS 
 
 1. **BerserkerStance**: +3% crit on all attacks (valued by future damage)
 2. **BattleStance**: Enables Overpower, Charge, Rend, Sweeping Strikes
-3. **DefensiveStance**: Enables defensive abilities (rarely used for DPS)
+
+(DefensiveStance is never recommended for DPS rotations)
 
 When the simulator calculates the best action:
 - It simulates 9 seconds ahead for each possible action
+- Uses **real swing timers** (mhTimer/ohTimer) for precise auto-attack damage calculations
 - Stance switches do 0 direct damage but enable high-value abilities
 - The Berserker +3% crit bonus is captured in future ability damage
+- HS/Cleave damage is properly valued based on when the next swing will land
 
 This means the simulator **decides** when to switch stance based on DPS, not hardcoded rules.
 
@@ -310,6 +377,10 @@ state = {
     mhSpeed = 2600,
     hasOH = false,              -- Off-hand equipped?
     tacticalMastery = 25,
+
+    -- Swing Timers (REAL values from game state, in ms)
+    mhTimer = 1200,             -- Time until next MH swing
+    ohTimer = 800,              -- Time until next OH swing (if dual-wield)
 
     -- Buff Tracking
     hasBattleShout = true,

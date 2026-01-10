@@ -1814,6 +1814,13 @@ function Engine.CacheValid(newState)
 		return false
 	end
 
+	-- MH swing is imminent (< 300ms) - recalculate to properly value HS/Cleave
+	-- This ensures we make the right decision when a swing is about to land
+	local mhTimer = newState.mhTimer or 0
+	if mhTimer > 0 and mhTimer < 300 then
+		return false
+	end
+
 	-- Enemy count changed
 	if (oldState.enemyCount or 1) ~= (newState.enemyCount or 1) then
 		return false
@@ -3182,9 +3189,9 @@ function Engine.SimulateDecisionHorizon(state, firstAction, horizon)
 end
 
 ---------------------------------------
--- Estimate auto-attack damage over a time horizon
--- Includes HS/Cleave bonus if queued
--- This is used by SimulateDecisionHorizon to properly value queued swings
+-- Calculate auto-attack damage over a time horizon using REAL swing timers
+-- Uses state.mhTimer/ohTimer (time until next swing) for precise calculations
+-- Includes HS/Cleave bonus on first MH swing if queued
 ---------------------------------------
 function Engine.EstimateAutoAttackDamage(state, horizon)
 	local damage = 0
@@ -3201,11 +3208,25 @@ function Engine.EstimateAutoAttackDamage(state, horizon)
 	local mhAvg = (mhDmgMin + mhDmgMax) / 2
 	local ohAvg = state.hasOH and ((ohDmgMin + ohDmgMax) / 2) or 0
 
-	-- Swing speed with haste (convert ms to seconds for calculation)
+	-- Haste modifier
 	local hasteMod = Engine.GetHasteMod(state) or 1
-	if hasteMod <= 0 then hasteMod = 1 end  -- Prevent division by zero
-	local mhSpeed = mhSpeedMs / hasteMod  -- Still in ms
+	if hasteMod <= 0 then hasteMod = 1 end
+
+	-- Effective weapon speeds with haste (in ms)
+	local mhSpeed = mhSpeedMs / hasteMod
 	local ohSpeed = state.hasOH and (ohSpeedMs / hasteMod) or 999999
+
+	---------------------------------------
+	-- REAL SWING TIMERS from game state
+	-- mhTimer/ohTimer = time until next swing (in ms)
+	-- If 0 or nil, swing just happened, next is at full speed
+	---------------------------------------
+	local mhTimer = state.mhTimer or 0
+	local ohTimer = state.ohTimer or 0
+
+	-- If timer is 0 or very small, next swing is at full swing speed
+	if mhTimer <= 0 then mhTimer = mhSpeed end
+	if ohTimer <= 0 then ohTimer = ohSpeed end
 
 	-- Damage modifiers
 	local damageMod = Engine.GetDamageMod(state) or 1
@@ -3216,45 +3237,54 @@ function Engine.EstimateAutoAttackDamage(state, horizon)
 	local critMod = 2.0 + (impale / 100)
 	local critMultiplier = 1 + (critChance * (critMod - 1))
 
-	-- Number of MH swings in horizon (horizon is in ms, mhSpeed is in ms)
-	local mhSwings = 0
-	if mhSpeed > 0 then
-		mhSwings = math.floor(horizon / mhSpeed)
-	end
-	if mhSwings < 1 then mhSwings = 1 end  -- At least 1 swing
+	---------------------------------------
+	-- MAIN HAND SWINGS using real timer
+	-- First swing at mhTimer, subsequent at mhTimer + n*mhSpeed
+	---------------------------------------
+	local mhTime = mhTimer
+	local firstMHSwing = true
 
-	-- Number of OH swings in horizon (if dual-wield)
-	local ohSwings = 0
-	if state.hasOH and ohSpeed > 0 then
-		ohSwings = math.floor(horizon / ohSpeed)
-	end
+	while mhTime <= horizon do
+		local swingDamage = mhAvg * damageMod * critMultiplier
 
-	-- Base auto-attack damage
-	local mhDamage = mhAvg * damageMod * critMultiplier * mhSwings
-	local ohDamage = ohAvg * damageMod * critMultiplier * ohSwings * 0.5  -- OH does 50% damage
+		-- FIRST MH swing gets HS/Cleave bonus if queued
+		if firstMHSwing and state.swingQueued then
+			local swingBonus = 0
 
-	damage = mhDamage + ohDamage
-
-	-- CRITICAL: Add HS/Cleave bonus if queued (only for FIRST swing)
-	-- This is what was missing - the extra damage from queued swing ability
-	if state.swingQueued then
-		local swingBonus = 0
-
-		if state.swingQueued == "hs" then
-			swingBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS or 157
-		elseif state.swingQueued == "cleave" then
-			swingBonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or Engine.CLEAVE_BONUS or 50
-			-- Cleave hits 2 targets
-			local enemyCount = state.enemyCountMelee or state.enemyCount or 1
-			if enemyCount >= 2 then
-				swingBonus = swingBonus * 2
+			if state.swingQueued == "hs" then
+				swingBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS or 157
+			elseif state.swingQueued == "cleave" then
+				swingBonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or Engine.CLEAVE_BONUS or 50
+				-- Cleave hits 2 targets
+				local enemyCount = state.enemyCountMelee or state.enemyCount or 1
+				if enemyCount >= 2 then
+					swingBonus = swingBonus * 2
+				end
 			end
+
+			-- HS/Cleave can crit
+			local hsCritChance = (Engine.GetCritChance(state, "HeroicStrike") or 20) / 100
+			local hsCritMult = 1 + (hsCritChance * (critMod - 1))
+			swingDamage = swingDamage + (swingBonus * damageMod * hsCritMult)
 		end
 
-		-- Add bonus damage with crit chance (HS/Cleave can crit)
-		local hsCritChance = (Engine.GetCritChance(state, "HeroicStrike") or 20) / 100
-		local hsCritMult = 1 + (hsCritChance * (critMod - 1))
-		damage = damage + (swingBonus * damageMod * hsCritMult)
+		firstMHSwing = false
+		damage = damage + swingDamage
+		mhTime = mhTime + mhSpeed
+	end
+
+	---------------------------------------
+	-- OFF HAND SWINGS using real timer (if dual-wield)
+	-- OH does 50% damage, no HS/Cleave
+	---------------------------------------
+	if state.hasOH then
+		local ohTime = ohTimer
+
+		while ohTime <= horizon do
+			local swingDamage = ohAvg * damageMod * critMultiplier * 0.5
+			damage = damage + swingDamage
+			ohTime = ohTime + ohSpeed
+		end
 	end
 
 	return damage

@@ -5,13 +5,16 @@ A comprehensive Fury Warrior rotation addon for TurtleWoW (1.12 vanilla client w
 ## Table of Contents
 
 1. [Architecture Overview](Architecture.md) - Code structure and module organization
-2. [Detection Systems](Detection.md) - SuperWoW, UnitXP, creature types, bleed immunity
-3. [Simulation Engine](Simulation.md) - Pure simulation-based decision system (Zebouski-style)
-4. [Rend Tracking](Rend.md) - Multi-target Rend tracking via combat log and GUID
-5. [Time To Die (TTD)](TTD.md) - Linear regression algorithm for death prediction
-6. [Spell & Talent System](Spells.md) - Dynamic spell rank detection and spell verification
-7. [AoE Detection](AoE.md) - Nameplate scanning and enemy counting
-8. [Swing Timer](SwingTimer.md) - Main-hand/off-hand swing tracking
+2. [Simulation Engine](Simulation.md) - 100% simulation-based decisions (stance switches, swing timers)
+3. [Toggles](Toggles.md) - Cooldown toggles (Burst, Reckless, Sync) and AoE modes
+4. [Interrupt System](Interrupt.md) - CastingTracker and auto-Pummel
+5. [Detection Systems](Detection.md) - SuperWoW, UnitXP, creature types, bleed immunity
+6. [Rend Tracking](Rend.md) - Multi-target Rend tracking via combat log and GUID
+7. [Time To Die (TTD)](TTD.md) - Linear regression algorithm for death prediction
+8. [Spell & Talent System](Spells.md) - Dynamic spell rank detection and spell verification
+9. [AoE Detection](AoE.md) - Nameplate scanning and enemy counting
+10. [Swing Timer](SwingTimer.md) - Main-hand/off-hand swing tracking
+11. [Changelog](CHANGELOG.md) - Version history and recent changes
 
 ## Requirements
 
@@ -112,8 +115,9 @@ AutoTurtleWarrior/
 ├── Sim/
 │   ├── Abilities.lua     - Ability definitions and damage formulas
 │   ├── RageModel.lua     - Rage generation formulas (Zebouski)
-│   ├── Engine.lua        - Combat simulation engine (9s tactical)
-│   └── Simulator.lua     - Time-window sim, cooldown toggles
+│   ├── Strategic.lua     - Cooldown synergy planning
+│   ├── Engine.lua        - Combat simulation engine (3400+ lines)
+│   └── Simulator.lua     - Cooldown toggles, GetNextAbility wrapper
 ├── Rotation/
 │   └── Rotation.lua      - Main rotation execution logic
 ├── UI/
@@ -123,6 +127,7 @@ AutoTurtleWarrior/
 │   └── Events.lua        - Event registration and handling
 └── Documentation/
     ├── README.md         - This file
+    ├── CHANGELOG.md      - Version history and changes
     ├── Architecture.md   - Code structure overview
     ├── Simulation.md     - Simulation engine details
     ├── Toggles.md        - Cooldown & mode toggle system
