@@ -771,6 +771,14 @@ function Engine.ProcessHit(state, damage, critChance, isMH, isAbility)
 		end
 	end
 
+	-- Apply Dual Wield Specialization to offhand hits (Fury talent)
+	-- +5/10/15/20/25% offhand damage (5 talent points)
+	local isOH = not isMH
+	if isOH and ATW.Talents and ATW.Talents.DualWieldSpec and ATW.Talents.DualWieldSpec > 0 then
+		local bonus = ATW.Talents.DualWieldSpec * 5  -- 5% per point
+		finalDamage = finalDamage * (1 + bonus / 100)
+	end
+
 	-- Apply damage modifiers from buffs
 	finalDamage = finalDamage * Engine.GetDamageMod(state)
 

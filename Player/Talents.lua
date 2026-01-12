@@ -332,7 +332,15 @@ function ATW.GetBattleShoutAP()
 	local rank = ATW.Spells and ATW.Spells.BattleShoutRank or 0
 	if rank <= 0 then return 232 end  -- Default to max
 	local data = ATW.BattleShoutData[rank]
-	return data and data.ap or 232
+	local baseAP = data and data.ap or 232
+
+	-- Apply Improved Battle Shout talent (Fury/Arms)
+	-- +5/10/15/20/25% Battle Shout AP (5 talent points)
+	if ATW.Talents and ATW.Talents.ImprovedBattleShout and ATW.Talents.ImprovedBattleShout > 0 then
+		baseAP = baseAP * (1 + ATW.Talents.ImprovedBattleShout * 0.05)
+	end
+
+	return baseAP
 end
 
 ---------------------------------------
@@ -488,6 +496,21 @@ function ATW.LoadTalents()
 	-- Booming Voice (Fury tier 1, slot 1) - Shout range/duration
 	-- Not used in sim
 
+	-- Improved Battle Shout (Fury tier 2 or Arms tier 2, 5 points)
+	-- +5/10/15/20/25% Battle Shout AP
+	-- Index unknown - scan by name in both Fury and Arms trees
+	ATW.Talents.ImprovedBattleShout = 0
+	for tree = 1, 2 do  -- Scan Arms (1) and Fury (2)
+		for i = 1, 30 do
+			local name, _, _, _, rank = GetTalentInfo(tree, i)
+			if name and (string.find(name, "Improved Battle Shout") or string.find(name, "Battle Shout") and string.find(name, "Improved")) then
+				ATW.Talents.ImprovedBattleShout = rank  -- 0-5 points
+				break
+			end
+		end
+		if ATW.Talents.ImprovedBattleShout > 0 then break end
+	end
+
 	-- Cruelty (Fury tier 1, slot 2)
 	-- +1/2/3/4/5% crit chance
 	_, _, _, _, r = GetTalentInfo(2, 2)
@@ -542,6 +565,18 @@ function ATW.LoadTalents()
 		end
 	end
 
+	-- Dual Wield Specialization (Fury tier 6, 5 points)
+	-- +5/10/15/20/25% offhand weapon damage
+	-- Index unknown - scan by name
+	ATW.Talents.DualWieldSpec = 0
+	for i = 1, 30 do
+		local name, _, _, _, rank = GetTalentInfo(2, i)
+		if name and string.find(name, "Dual Wield Specialization") then
+			ATW.Talents.DualWieldSpec = rank  -- 0-5 points
+			break
+		end
+	end
+
 	---------------------------------------
 	-- ARMS TREE (continued)
 	---------------------------------------
@@ -584,6 +619,8 @@ function ATW.LoadTalents()
 		ATW.Print("  Master of Arms: " .. (ATW.Talents.MasterOfArms or 0) .. " points")
 		ATW.Print("  Reckless Execute: " .. (ATW.Talents.RecklessExecute or 0) .. " points")
 		ATW.Print("  Improved Whirlwind: " .. (ATW.Talents.ImprovedWhirlwind or 0) .. " points")
+		ATW.Print("  Dual Wield Spec: " .. (ATW.Talents.DualWieldSpec or 0) .. " points")
+		ATW.Print("  Improved Battle Shout: " .. (ATW.Talents.ImprovedBattleShout or 0) .. " points")
 	end
 end
 
