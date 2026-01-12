@@ -34,6 +34,9 @@ EventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 EventFrame:RegisterEvent("UNIT_ATTACK_POWER")
 -- TTD updates
 EventFrame:RegisterEvent("UNIT_HEALTH")
+-- Cache invalidation events
+EventFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")  -- Cooldown completed
+EventFrame:RegisterEvent("UNIT_POWER")  -- Rage/mana changes
 -- SuperWoW swing timer (more reliable than combat log)
 EventFrame:RegisterEvent("UNIT_CASTEVENT")
 
@@ -188,6 +191,10 @@ EventFrame:SetScript("OnEvent", function()
 	elseif event == "UNIT_AURA" or event == "UNIT_ATTACK_POWER" then
 		if arg1 == "player" then
 			ATW.UpdateStats()
+			-- Invalidate cache when buffs change (Death Wish, Enrage, etc.)
+			if ATW.Engine and ATW.Engine.InvalidateCache then
+				ATW.Engine.InvalidateCache()
+			end
 		end
 
 	elseif event == "PLAYER_EQUIPMENT_CHANGED" then
@@ -197,6 +204,27 @@ EventFrame:SetScript("OnEvent", function()
 	elseif event == "UNIT_HEALTH" then
 		if arg1 == "target" then
 			ATW.UpdateTargetTTD()
+		end
+
+	-- Cache invalidation: Cooldown completed
+	elseif event == "SPELL_UPDATE_COOLDOWN" then
+		-- Major cooldown completed, invalidate cache for instant update
+		if ATW.Engine and ATW.Engine.InvalidateCache then
+			ATW.Engine.InvalidateCache()
+		end
+
+	-- Cache invalidation: Rage changed
+	elseif event == "UNIT_POWER" then
+		if arg1 == "player" then
+			-- Rage changed significantly (>= 10 rage difference)
+			local oldRage = state.LastRage or 0
+			local newRage = UnitMana("player")
+			if math.abs(newRage - oldRage) >= 10 then
+				if ATW.Engine and ATW.Engine.InvalidateCache then
+					ATW.Engine.InvalidateCache()
+				end
+				state.LastRage = newRage
+			end
 		end
 
 	-- SuperWoW swing timer event (more reliable than combat log)

@@ -10,6 +10,8 @@ ATW.Gear = {
 	trinkets = {},
 	enchants = {},
 	weaponType = nil,  -- "Axe", "Mace", "Sword", "Polearm", or nil
+	is2H = false,  -- true if 2H weapon equipped
+	normSpeed = 2.4,  -- Normalization speed (2.4 for 1H, 3.3 for 2H)
 	lastScan = 0,
 	scanInterval = 2,  -- Rescan every 2 seconds
 }
@@ -304,12 +306,15 @@ function ATW.ScanEnchants()
 end
 
 ---------------------------------------
--- Detect equipped main-hand weapon type
+-- Detect equipped main-hand weapon type AND 2H status
 -- Returns: "Axe", "Mace", "Sword", "Polearm", or nil
--- Used for Master of Arms talent (TurtleWoW 1.17.2)
+-- Also sets is2H and normSpeed
+-- Used for Master of Arms talent (TurtleWoW 1.17.2) and weapon normalization
 ---------------------------------------
 function ATW.ScanWeaponType()
 	ATW.Gear.weaponType = nil
+	ATW.Gear.is2H = false
+	ATW.Gear.normSpeed = 2.4  -- Default 1H
 
 	-- Main hand slot is 16
 	local itemLink = GetInventoryItemLink("player", 16)
@@ -318,8 +323,19 @@ function ATW.ScanWeaponType()
 	end
 
 	-- Get item info from link
-	local _, _, _, _, _, itemType, itemSubType = GetItemInfo(itemLink)
+	-- Return order: name, link, quality, iLevel, reqLevel, type, subType, stackCount, invType
+	local _, _, _, _, _, itemType, itemSubType, _, inventoryType = GetItemInfo(itemLink)
 
+	-- Detect 2H vs 1H from inventory type
+	if inventoryType == "INVTYPE_2HWEAPON" then
+		ATW.Gear.is2H = true
+		ATW.Gear.normSpeed = 3.3  -- 2H normalization
+	elseif inventoryType == "INVTYPE_WEAPON" then
+		ATW.Gear.is2H = false
+		ATW.Gear.normSpeed = 2.4  -- 1H normalization
+	end
+
+	-- Detect weapon type for Master of Arms
 	if itemType == "Weapon" or itemType == "Arma" then  -- "Arma" for localized clients
 		-- Map weapon subtypes to categories
 		-- English/Localized weapon subtype strings

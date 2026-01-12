@@ -75,7 +75,17 @@ Engine.EXECUTE_RAGE_MULT = 15
 Engine.BT_BASE = 200
 Engine.BT_AP_COEFF = 0.35
 
--- Whirlwind: normalized speed (constant across ranks)
+-- Whirlwind: normalized speed (2.4 for 1H, 3.3 for 2H)
+-- Now dynamic based on equipped weapon
+function Engine.GetNormalizationSpeed()
+	-- Check if Gear scan has determined weapon type
+	if ATW.Gear and ATW.Gear.normSpeed then
+		return ATW.Gear.normSpeed  -- 2.4 for 1H, 3.3 for 2H
+	end
+	return 2.4  -- Fallback to 1H
+end
+
+-- Legacy constant (kept for compatibility, but prefer GetNormalizationSpeed())
 Engine.WW_NORM_SPEED = 2.4
 
 -- Mortal Strike: ATW.GetMortalStrikeBonus()
@@ -577,6 +587,14 @@ function Engine.GetDamageMod(state)
 		mod = mod * damageMultiplier
 	end
 
+	-- Two-Handed Weapon Specialization (Arms talent, 5 points)
+	-- +1/2/3/4/5% damage with 2H weapons
+	-- Source: Vanilla WoW Arms tree
+	if ATW.Gear and ATW.Gear.is2H and ATW.Talents and ATW.Talents.TwoHandSpec and ATW.Talents.TwoHandSpec > 0 then
+		local bonus = ATW.Talents.TwoHandSpec  -- 1-5%
+		mod = mod * (1 + bonus / 100)
+	end
+
 	return mod
 end
 
@@ -816,11 +834,9 @@ function Engine.GenerateRage(state, damage, isOH, isDodge, avgWeaponDmg)
 	if uwChance > 0 then
 		local uwRoll = math.random() * 100
 		if uwRoll < uwChance then
-			rage = rage + 1
-			-- TurtleWoW: 2H weapons get +2 instead of +1
-			if not state.hasOH then
-				rage = rage + 1
-			end
+			-- TurtleWoW: 2H weapons get +2 rage, 1H weapons get +1
+			local bonusRage = (ATW.Gear and ATW.Gear.is2H) and 2 or 1
+			rage = rage + bonusRage
 		end
 	end
 
@@ -1070,7 +1086,9 @@ function Engine.UseAbility(state, name)
 		elseif name == "Whirlwind" then
 			-- Normalized weapon damage + AP bonus
 			-- Formula: weaponDmg + (ap/14) * normSpeed
-			local weaponDmg = Engine.RollWeaponDamage(state, false, true, Engine.WW_NORM_SPEED)
+			-- Dynamic normalization: 2.4 for 1H, 3.3 for 2H
+			local normSpeed = Engine.GetNormalizationSpeed()
+			local weaponDmg = Engine.RollWeaponDamage(state, false, true, normSpeed)
 			local targets = math.min(Engine.CountAliveTargets(state), 4)
 			damage = weaponDmg * targets
 
@@ -1081,8 +1099,10 @@ function Engine.UseAbility(state, name)
 
 		elseif name == "MortalStrike" then
 			-- Weapon + bonus + (ap/14) * normSpeed
+			-- Dynamic normalization: 2.4 for 1H, 3.3 for 2H
 			local msBonus = ATW.GetMortalStrikeBonus and ATW.GetMortalStrikeBonus() or Engine.MS_BONUS
-			damage = Engine.RollWeaponDamage(state, false, true, Engine.WW_NORM_SPEED) + msBonus
+			local normSpeed = Engine.GetNormalizationSpeed()
+			damage = Engine.RollWeaponDamage(state, false, true, normSpeed) + msBonus
 
 		elseif name == "Slam" then
 			-- Weapon + bonus + (ap/14) * weaponSpeed
@@ -1841,14 +1861,37 @@ Engine.Cache = {
 	lastResult = nil,
 	lastUpdateTime = 0,
 	MIN_UPDATE_INTERVAL = 100,  -- 100ms minimum between full recalculations
+	dirty = false,  -- Explicit dirty flag for event-driven invalidation
 	hits = 0,
 	misses = 0,
 }
+
+---------------------------------------
+-- Invalidate Cache (Event-Driven)
+-- Call this from events when something important changes:
+-- - Cooldown completes
+-- - Rage changes significantly
+-- - Buff applies/expires
+-- - Overpower proc
+-- - Target HP changes (Execute range)
+---------------------------------------
+function Engine.InvalidateCache()
+	Engine.Cache.dirty = true
+	Engine.Cache.lastState = nil
+	Engine.Cache.lastResult = nil
+	-- Force recomputation on next GetNextAbility() call
+end
 
 -- Check if state changed enough to require recalculation
 function Engine.CacheValid(newState)
 	local cache = Engine.Cache
 	local now = GetTime() * 1000
+
+	-- Check dirty flag first (event-driven invalidation)
+	if cache.dirty then
+		cache.dirty = false  -- Clear flag
+		return false  -- Force recalculation
+	end
 
 	-- Always recalculate if enough time has passed
 	if now - cache.lastUpdateTime > 500 then  -- Max 500ms cache lifetime
@@ -2114,10 +2157,17 @@ function Engine.CaptureCurrentState()
 
 	state.timeToMelee = 0
 
-	-- Determine melee range based on combat state
+	-- Determine melee range based on combat state and actual distance
 	if state.inCombat then
-		-- In combat: always assume melee (we're actively fighting)
-		state.inMeleeRange = true
+		-- In combat: check REAL melee range (<=5 yards)
+		-- This prevents recommending melee abilities after knockback/gap
+		if state.targetDistance and state.targetDistance <= Engine.MELEE_RANGE then
+			state.inMeleeRange = true
+		else
+			-- Out of melee range (e.g., after knockback)
+			-- Don't recommend melee abilities until back in range
+			state.inMeleeRange = false
+		end
 	else
 		-- Out of combat: check if we're in Charge range (8-25 yards)
 		-- If yes, we're NOT in melee - we need to Charge to get there!
