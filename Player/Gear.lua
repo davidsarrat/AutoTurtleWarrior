@@ -9,6 +9,7 @@ ATW.Gear = {
 	sets = {},
 	trinkets = {},
 	enchants = {},
+	weaponType = nil,  -- "Axe", "Mace", "Sword", "Polearm", or nil
 	lastScan = 0,
 	scanInterval = 2,  -- Rescan every 2 seconds
 }
@@ -303,6 +304,49 @@ function ATW.ScanEnchants()
 end
 
 ---------------------------------------
+-- Detect equipped main-hand weapon type
+-- Returns: "Axe", "Mace", "Sword", "Polearm", or nil
+-- Used for Master of Arms talent (TurtleWoW 1.17.2)
+---------------------------------------
+function ATW.ScanWeaponType()
+	ATW.Gear.weaponType = nil
+
+	-- Main hand slot is 16
+	local itemLink = GetInventoryItemLink("player", 16)
+	if not itemLink then
+		return
+	end
+
+	-- Get item info from link
+	local _, _, _, _, _, itemType, itemSubType = GetItemInfo(itemLink)
+
+	if itemType == "Weapon" or itemType == "Arma" then  -- "Arma" for localized clients
+		-- Map weapon subtypes to categories
+		-- English/Localized weapon subtype strings
+		if itemSubType then
+			local subTypeLower = string.lower(itemSubType)
+
+			-- Axes
+			if string.find(subTypeLower, "axe") or string.find(subTypeLower, "hacha") then
+				ATW.Gear.weaponType = "Axe"
+
+			-- Maces
+			elseif string.find(subTypeLower, "mace") or string.find(subTypeLower, "maza") then
+				ATW.Gear.weaponType = "Mace"
+
+			-- Swords
+			elseif string.find(subTypeLower, "sword") or string.find(subTypeLower, "espada") then
+				ATW.Gear.weaponType = "Sword"
+
+			-- Polearms
+			elseif string.find(subTypeLower, "polearm") or string.find(subTypeLower, "asta") then
+				ATW.Gear.weaponType = "Polearm"
+			end
+		end
+	end
+end
+
+---------------------------------------
 -- Full gear scan
 ---------------------------------------
 function ATW.ScanGear()
@@ -314,6 +358,7 @@ function ATW.ScanGear()
 	ATW.ScanSets()
 	ATW.ScanTrinkets()
 	ATW.ScanEnchants()
+	ATW.ScanWeaponType()
 	ATW.Gear.lastScan = now
 end
 
@@ -416,6 +461,21 @@ function ATW.PrintGear()
 	ATW.ScanGear()
 
 	ATW.Print("=== Gear Info ===")
+
+	-- Weapon Type (for Master of Arms)
+	ATW.Print("Weapon Type: " .. (ATW.Gear.weaponType or "Unknown"))
+	if ATW.Gear.weaponType and ATW.Talents and ATW.Talents.MasterOfArms and ATW.Talents.MasterOfArms > 0 then
+		ATW.Print("  Master of Arms (" .. ATW.Talents.MasterOfArms .. " points) active!")
+		if ATW.Gear.weaponType == "Axe" then
+			ATW.Print("  Bonus: +" .. (ATW.Talents.MasterOfArms) .. "% crit")
+		elseif ATW.Gear.weaponType == "Mace" then
+			ATW.Print("  Bonus: +" .. (ATW.Talents.MasterOfArms * 4) .. "% armor pen")
+		elseif ATW.Gear.weaponType == "Sword" then
+			ATW.Print("  Bonus: +" .. (ATW.Talents.MasterOfArms * 2) .. "% extra attack on crit")
+		elseif ATW.Gear.weaponType == "Polearm" then
+			ATW.Print("  Bonus: +" .. ATW.Talents.MasterOfArms .. " yard range")
+		end
+	end
 
 	-- Sets
 	ATW.Print("Set Bonuses:")

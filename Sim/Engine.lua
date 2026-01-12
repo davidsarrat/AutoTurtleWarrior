@@ -110,7 +110,7 @@ Engine.DW_TICKS = 4
 
 -- Buff durations (milliseconds)
 Engine.BUFF_DURATIONS = {
-	Enrage = 12000,         -- 12s (from Bloodrage or taking crits with talent)
+	Enrage = 8000,          -- 8s in TurtleWoW (Bloodrage can proc it, Nov 2024 change)
 	DeathWish = 30000,      -- 30s
 	Recklessness = 15000,   -- 15s
 	Flurry = 0,             -- 3 charges, not time-based
@@ -547,6 +547,36 @@ function Engine.GetDamageMod(state)
 		end
 	end
 
+	-- Master of Arms (Mace): +4/8/12/16/20% armor penetration (TurtleWoW 1.17.2)
+	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
+	-- Formula: ArmorReduction = Armor / (Armor + 400 + 85*Level)
+	-- Against level 63 bosses (~3730 armor):
+	--   Without pen: 3730 / 8485 = 43.9% reduction
+	--   With 20% pen (746 armor ignored): 2984 / 7739 = 38.6% reduction
+	--   Damage increase: (1 - 0.386) / (1 - 0.439) = 1.094 = +9.4% damage
+	-- Approximation: 20% armor pen ≈ 9.4% damage increase vs raid bosses
+	-- Per point: ~0.47% damage increase per 1% armor pen
+	if ATW.Gear and ATW.Gear.weaponType == "Mace" and ATW.Talents and ATW.Talents.MasterOfArms and ATW.Talents.MasterOfArms > 0 then
+		local armorPenPercent = ATW.Talents.MasterOfArms * 4  -- 4/8/12/16/20%
+
+		-- Calculate damage increase based on boss armor
+		-- Simplified formula for level 63 bosses (3730 armor baseline)
+		local bossArmor = 3730
+		local armorConstant = 400 + 85 * 63  -- 5755
+
+		-- Reduction without armor pen
+		local baseReduction = bossArmor / (bossArmor + armorConstant)
+
+		-- Reduction with armor pen (ignore X% of armor)
+		local ignoredArmor = bossArmor * (armorPenPercent / 100)
+		local effectiveArmor = bossArmor - ignoredArmor
+		local penReduction = effectiveArmor / (effectiveArmor + armorConstant)
+
+		-- Damage increase = (1 - newReduction) / (1 - oldReduction)
+		local damageMultiplier = (1 - penReduction) / (1 - baseReduction)
+		mod = mod * damageMultiplier
+	end
+
 	return mod
 end
 
@@ -567,6 +597,12 @@ function Engine.GetCritChance(state, isAbility)
 	-- if ATW.Talents and ATW.Talents.Cruelty then
 	-- 	crit = crit + ATW.Talents.Cruelty
 	-- end
+
+	-- Master of Arms (Axe): +1/2/3/4/5% crit (TurtleWoW 1.17.2)
+	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
+	if ATW.Gear and ATW.Gear.weaponType == "Axe" and ATW.Talents and ATW.Talents.MasterOfArms and ATW.Talents.MasterOfArms > 0 then
+		crit = crit + ATW.Talents.MasterOfArms  -- 0-5% depending on points
+	end
 
 	-- Recklessness (+100% crit)
 	if state.buffs.Recklessness and state.buffs.Recklessness.endTime > state.time then
@@ -1121,16 +1157,23 @@ function Engine.UseAbility(state, name)
 			endTime = state.time + Engine.BUFF_DURATIONS.Bloodrage,
 			stacks = 1,
 		}
-		-- Enrage effect from Bloodrage
-		state.buffs.Enrage = {
-			endTime = state.time + Engine.BUFF_DURATIONS.Enrage,
-			stacks = 1,
-		}
+		-- TurtleWoW (Nov 2024): Bloodrage self-damage can crit and proc Enrage
+		-- Chance = player's physical crit chance
+		if ATW.Talents and ATW.Talents.Enrage and ATW.Talents.Enrage > 0 then
+			local critChance = Engine.GetCritChance(state) / 100
+			if math.random() < critChance then
+				state.buffs.Enrage = {
+					endTime = state.time + Engine.BUFF_DURATIONS.Enrage,
+					stacks = 1,
+				}
+			end
+		end
 	end
 
-	-- Apply cooldown
-	if ability.cd and ability.cd > 0 then
-		state.cooldowns[name] = state.time + (ability.cd * 1000)
+	-- Apply cooldown (check talents for dynamic CDs)
+	local cooldownSeconds = ATW.GetAbilityCooldown and ATW.GetAbilityCooldown(name) or ability.cd
+	if cooldownSeconds and cooldownSeconds > 0 then
+		state.cooldowns[name] = state.time + (cooldownSeconds * 1000)
 	end
 
 	-- Apply GCD
@@ -1300,6 +1343,29 @@ function Engine.ProcessAutoAttack(state, isOH)
 		state.autoDamage = state.autoDamage + hojDamage
 		state.totalDamage = state.totalDamage + hojDamage
 		finalDamage = finalDamage + hojDamage
+	end
+
+	-- Master of Arms (Sword): Extra attack proc (TurtleWoW 1.17.2)
+	-- 2/4/6/8/10% chance for extra attack based on talent points
+	-- Only procs on MH swings, not OH
+	if not isOH and wasCrit then  -- Only on MH crits (like Sword Spec in retail)
+		if ATW.Gear and ATW.Gear.weaponType == "Sword" and ATW.Talents and ATW.Talents.MasterOfArms and ATW.Talents.MasterOfArms > 0 then
+			local procChance = ATW.Talents.MasterOfArms * 2  -- 2/4/6/8/10%
+			local roll = math.random() * 100
+			if roll < procChance then
+				-- Extra MH attack
+				local damage = Engine.RollWeaponDamage(state, false, false)
+				local critChance = Engine.GetCritChance(state, nil)
+				local procDamage = Engine.ProcessHit(state, damage, critChance, true, nil)
+
+				-- Generate rage from the extra attack
+				Engine.GenerateRage(state, procDamage, false, false)
+
+				state.autoDamage = state.autoDamage + procDamage
+				state.totalDamage = state.totalDamage + procDamage
+				finalDamage = finalDamage + procDamage
+			end
+		end
 	end
 
 	return finalDamage
@@ -1967,7 +2033,7 @@ function Engine.CaptureCurrentState()
 	-- Sweeping Strikes buff (AoE)
 	state.hasSweepingStrikes = ATW.Buff and ATW.Buff("player", "Ability_Rogue_SliceDice")
 
-	-- Enrage buff (from Bloodrage or crits with talent)
+	-- Enrage buff (TurtleWoW: from Bloodrage crit or taking crits with talent)
 	state.hasEnrage = ATW.Buff and ATW.Buff("player", "Spell_Shadow_UnholyFrenzy")
 
 	-- Bloodrage active (DoT on self = generating rage)
@@ -2541,20 +2607,48 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- Bloodrage (any stance, OFF-GCD)
-	-- Don't use if Charge is available (Bloodrage enters combat)
+	-- Philosophy: Use on CD for rage economy, soft-sync with burst
+	-- TurtleWoW (Nov 2024): Can proc Enrage (+15% dmg 8s) based on crit chance
+	-- Source: https://forum.turtle-wow.org/viewtopic.php?t=16775
+	-- NOTE: Charge blocking is done in Rotation.lua (so timeline still shows Bloodrage)
 	---------------------------------------
 	if hasSpell("Bloodrage") then
 		local bloodrageReady = (state.cooldowns.Bloodrage or 0) <= 0
 		if bloodrageReady and not state.hasBloodrageActive then
-			local chargeBlocked = false
-			if hasSpell("Charge") and not state.inCombat and stance == 1 then
-				local chargeReady = (state.cooldowns.Charge or 0) <= 0
-				local inChargeRange = state.targetDistance and state.targetDistance >= 8 and state.targetDistance <= 25
-				if chargeReady and inChargeRange then
-					chargeBlocked = true
+			-- Check CD mode
+			local cdMode = AutoTurtleWarrior_Config.BloodrageBurstMode
+			if cdMode == nil then cdMode = true end
+
+			local shouldUse = true
+
+			if cdMode then
+				-- In CD mode: check BurstEnabled toggle (off in sustain)
+				if not ATW.IsCooldownAllowed("Bloodrage") then
+					shouldUse = false
+				end
+
+				-- SOFT SYNC with Death Wish (less restrictive than before)
+				-- Only wait if: (1) DW coming soon AND (2) we have comfortable rage
+				-- Philosophy: Rage economy > perfect sync. Don't starve yourself.
+				if shouldUse and ATW.Has and ATW.Has.DeathWish then
+					local syncEnabled = AutoTurtleWarrior_Config.SyncCooldowns
+					if syncEnabled == nil then syncEnabled = true end
+					if syncEnabled and rage > 40 then  -- Only hold if comfortable rage
+						local dwCD = state.cooldowns and state.cooldowns.DeathWish or 999999
+						if dwCD > 0 and dwCD <= 15000 then  -- 15s window (was 10s)
+							shouldUse = false  -- Wait for DW
+						end
+					end
+				end
+
+				-- Emergency override: ALWAYS use if rage is low
+				-- 30 rage threshold (was 20) - more aggressive to prevent starvation
+				if not shouldUse and rage < 30 then
+					shouldUse = true
 				end
 			end
-			if not chargeBlocked then
+
+			if shouldUse then
 				table.insert(actions, {name = "Bloodrage", rage = 0, offGCD = true})
 			end
 		end
@@ -2712,7 +2806,7 @@ function Engine.GetActionDamage(state, action)
 		local base = ATW.GetExecuteBase and ATW.GetExecuteBase() or 600
 		local coeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or 15
 		local availableRage = state.rage
-		local execCost = ATW.Talents and ATW.Talents.ExecCost or 15
+		local execCost = 15  -- Fixed 15 rage in TurtleWoW 1.17.2
 		local excess = math.max(0, availableRage - execCost)
 		damage = base + (excess * coeff)
 
@@ -2823,11 +2917,20 @@ function Engine.GetActionDamage(state, action)
 	---------------------------------------
 	elseif action.name == "Bloodrage" then
 		-- Bloodrage generates rage (20 total: 10 instant + 10 over time)
-		-- In TurtleWoW it also triggers Enrage talent
+		-- TurtleWoW (Nov 2024): Can proc Enrage (+15% dmg for 8s) based on crit chance
 		-- Value = rage generated * expected damage per rage
 		local rageGen = 20
 		local avgDmgPerRage = 25  -- Rough estimate
-		damage = rageGen * avgDmgPerRage * 0.3  -- Discounted value
+
+		-- Add expected value from Enrage proc (critChance * enrageBenefit)
+		local enrageValue = 0
+		if ATW.Talents and ATW.Talents.Enrage and ATW.Talents.Enrage > 0 then
+			local critChance = Engine.GetCritChance(state) / 100
+			-- Very rough estimate: 8s of +15% damage on ~4 abilities = ~1500 extra damage
+			enrageValue = critChance * 1500
+		end
+
+		damage = (rageGen * avgDmgPerRage * 0.3) + (enrageValue * 0.5)  -- Discounted
 		canCrit = false
 
 	elseif action.name == "BerserkerRage" then
@@ -2987,6 +3090,7 @@ function Engine.ApplyAction(state, action)
 	if action.name == "Execute" then
 		-- Execute consumes ALL rage (base cost already paid above)
 		-- The excess rage was converted to damage in GetActionDamage
+		-- TurtleWoW 1.17.2: Base CD 5.5s, reduced by Reckless Execute talent
 		newState.rage = 0
 		newState.inCombat = true
 
@@ -2999,7 +3103,9 @@ function Engine.ApplyAction(state, action)
 		newState.inCombat = true
 
 	elseif action.name == "Whirlwind" then
-		newState.cooldowns.Whirlwind = 10000  -- 10s CD
+		-- TurtleWoW 1.17.2: Improved Whirlwind reduces CD by 1/1.5/2s
+		local wwCD = ATW.GetAbilityCooldown and ATW.GetAbilityCooldown("Whirlwind") or 10
+		newState.cooldowns.Whirlwind = wwCD * 1000
 		newState.inCombat = true
 
 	elseif action.name == "Overpower" then
@@ -3066,8 +3172,17 @@ function Engine.ApplyAction(state, action)
 	elseif action.name == "Bloodrage" then
 		newState.cooldowns.Bloodrage = 60000  -- 60s CD
 		newState.hasBloodrageActive = true
-		newState.hasEnrage = true  -- Bloodrage triggers Enrage in TurtleWoW
 		newState.inCombat = true  -- Bloodrage ENTERS COMBAT - blocks Charge!
+
+		-- TurtleWoW (Nov 2024): Bloodrage self-damage can crit and proc Enrage
+		-- Chance = player's physical crit chance
+		if ATW.Talents and ATW.Talents.Enrage and ATW.Talents.Enrage > 0 then
+			local critChance = Engine.GetCritChance(newState) / 100
+			if math.random() < critChance then
+				newState.hasEnrage = true
+			end
+		end
+
 		-- Generate instant rage (10 instant, 10 over time handled by rage gen)
 		newState.rage = math.min(100, newState.rage + 10)
 

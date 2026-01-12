@@ -736,12 +736,21 @@ function ATW.IsCooldownAllowed(cdName)
 		return cfg.BurstEnabled == true
 	end
 
+	-- Special case: Bloodrage in burst mode
+	if cdName == "Bloodrage" then
+		local burstMode = cfg.BloodrageBurstMode
+		if burstMode == nil then burstMode = true end
+		if burstMode then
+			return cfg.BurstEnabled == true
+		end
+	end
+
 	-- Check if it's a reckless cooldown
 	if ATW.RECKLESS_COOLDOWNS[cdName] then
 		return cfg.RecklessEnabled == true
 	end
 
-	-- Non-toggle cooldowns (Bloodrage, BerserkerRage, etc.) always allowed
+	-- Non-toggle cooldowns (BerserkerRage, etc.) always allowed
 	return true
 end
 

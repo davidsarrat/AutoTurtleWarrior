@@ -498,10 +498,13 @@ function ATW.LoadTalents()
 	_, _, _, _, r = GetTalentInfo(2, 5)
 	ATW.Talents.UnbridledWrath = r * 8  -- Percentage chance
 
-	-- Improved Execute (Fury tier 5, slot 2)
-	-- Reduces Execute cost by 2/5 rage
+	-- Reckless Execute (Fury tier 5, slot 2) - REPLACED Improved Execute in 1.17.2
+	-- Reduces Execute cooldown by 2/4 seconds (2 points removes CD entirely)
+	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
+	-- Note: Base Execute cost is 15 rage (no longer modified by talent)
 	_, _, _, _, r = GetTalentInfo(2, 10)
-	ATW.Talents.ExecCost = 15 - math.floor(r * 2.5)
+	ATW.Talents.RecklessExecute = r  -- 0-2 points
+	ATW.Talents.ExecCost = 15  -- Fixed cost in 1.17.2
 
 	-- Enrage / Wrecking Crew (Fury tier 5, slot 3)
 	-- On crit, +5/10/15/20/25% damage for 12s
@@ -526,6 +529,41 @@ function ATW.LoadTalents()
 	_, _, _, _, r = GetTalentInfo(2, 17)
 	ATW.Talents.HasBT = r > 0
 
+	-- Improved Whirlwind (Fury tier 5, 3 points) - NEW in 1.17.2
+	-- Reduces Whirlwind cooldown by 1/1.5/2 seconds
+	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
+	-- Index unknown - scan by name
+	ATW.Talents.ImprovedWhirlwind = 0
+	for i = 1, 30 do
+		local name, _, _, _, rank = GetTalentInfo(2, i)
+		if name and string.find(name, "Improved Whirlwind") then
+			ATW.Talents.ImprovedWhirlwind = rank  -- 0-3 points
+			break
+		end
+	end
+
+	---------------------------------------
+	-- ARMS TREE (continued)
+	---------------------------------------
+
+	-- Master of Arms (Arms tier 9, 5 points) - NEW in 1.17.2
+	-- Replaces weapon-specific specializations
+	-- Effect varies by equipped weapon type:
+	-- - Axe: +1/2/3/4/5% crit
+	-- - Mace: +4/8/12/16/20% armor penetration
+	-- - Sword: +2/4/6/8/10% chance for extra attack
+	-- - Polearm: +1 yard range per point
+	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
+	-- Index unknown - scan by name
+	ATW.Talents.MasterOfArms = 0
+	for i = 1, 30 do
+		local name, _, _, _, rank = GetTalentInfo(1, i)
+		if name and string.find(name, "Master of Arms") then
+			ATW.Talents.MasterOfArms = rank  -- 0-5 points
+			break
+		end
+	end
+
 	---------------------------------------
 	-- PROTECTION TREE (minimal)
 	---------------------------------------
@@ -543,6 +581,9 @@ function ATW.LoadTalents()
 		ATW.Print("  DW: " .. (ATW.Talents.DeepWounds or 0) .. " | Impale: " .. (ATW.Talents.Impale or 0))
 		ATW.Print("  BT: " .. (ATW.Talents.HasBT and "Yes" or "No") .. " | MS: " .. (ATW.Talents.HasMS and "Yes" or "No"))
 		ATW.Print("  AM: " .. (ATW.Talents.AngerManagement and "Yes" or "No"))
+		ATW.Print("  Master of Arms: " .. (ATW.Talents.MasterOfArms or 0) .. " points")
+		ATW.Print("  Reckless Execute: " .. (ATW.Talents.RecklessExecute or 0) .. " points")
+		ATW.Print("  Improved Whirlwind: " .. (ATW.Talents.ImprovedWhirlwind or 0) .. " points")
 	end
 end
 

@@ -74,15 +74,15 @@ Abilities.Whirlwind = {
 
 Abilities.Execute = {
 	name = "Execute",
-	rage = 15,  -- Base, reduced by talents
-	cd = 0,
+	rage = 15,  -- Fixed 15 rage in 1.17.2 (no talent reduction)
+	cd = 5.5,   -- TurtleWoW 1.17.2: 5.5s base, reduced by Reckless Execute talent
 	stance = {1, 3},  -- Battle or Berserker
 	gcd = true,
 	isCooldown = false,
 	damage = function(stats, rageAvailable)
 		-- TurtleWoW: base + (excessRage * coeff)
 		-- Values depend on spell rank
-		local cost = ATW.Talents.ExecCost or 15
+		local cost = 15  -- Fixed cost
 		local excess = (rageAvailable or 30) - cost
 		if excess < 0 then excess = 0 end
 		local base = ATW.GetExecuteBase and ATW.GetExecuteBase() or 600
@@ -572,4 +572,48 @@ function ATW.GetRageCost(abilityName)
 	end
 
 	return ability.rage
+end
+
+---------------------------------------
+-- Get ability cooldown accounting for talents
+-- TurtleWoW 1.17.2 changes:
+-- - Improved Whirlwind reduces WW CD
+-- - Reckless Execute reduces Execute CD
+-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
+---------------------------------------
+function ATW.GetAbilityCooldown(abilityName)
+	local ability = Abilities[abilityName]
+	if not ability then return 0 end
+
+	if abilityName == "Whirlwind" then
+		local baseCd = 10  -- Base Whirlwind CD in seconds
+		local reduction = 0
+		if ATW.Talents and ATW.Talents.ImprovedWhirlwind then
+			-- Improved Whirlwind: -1/-1.5/-2 seconds per point
+			-- Points: 0-3, Reduction: 0/1/1.5/2
+			local points = ATW.Talents.ImprovedWhirlwind
+			if points == 1 then reduction = 1
+			elseif points == 2 then reduction = 1.5
+			elseif points >= 3 then reduction = 2
+			end
+		end
+		return baseCd - reduction
+
+	elseif abilityName == "Execute" then
+		local baseCd = 5.5  -- TurtleWoW 1.17.2: 5.5s base CD
+		local reduction = 0
+		if ATW.Talents and ATW.Talents.RecklessExecute then
+			-- Reckless Execute: -2/-4 seconds (2 points = no CD)
+			-- Points: 0-2, Reduction: 0/2/4
+			local points = ATW.Talents.RecklessExecute
+			if points == 1 then reduction = 2
+			elseif points >= 2 then reduction = 4
+			end
+		end
+		local finalCD = baseCd - reduction
+		if finalCD < 0 then finalCD = 0 end  -- 2 points removes CD entirely
+		return finalCD
+	end
+
+	return ability.cd or 0
 end

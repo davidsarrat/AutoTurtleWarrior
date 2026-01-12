@@ -373,6 +373,32 @@ function ATW.HandleCommand(msg)
 			ATW.Print("Usage: /atw sync [on|off]")
 		end
 
+	elseif cmd == "bloodragecd" or cmd == "brcd" then
+		-- Toggle Bloodrage CD mode (treat as burst cooldown)
+		if AutoTurtleWarrior_Config.BloodrageBurstMode == nil then
+			AutoTurtleWarrior_Config.BloodrageBurstMode = ATW.DEFAULT.BloodrageBurstMode
+		end
+		AutoTurtleWarrior_Config.BloodrageBurstMode = not AutoTurtleWarrior_Config.BloodrageBurstMode
+		if AutoTurtleWarrior_Config.BloodrageBurstMode then
+			ATW.Print("Bloodrage CD: |cff00ff00ON|r (soft-sync with DW, rage economy priority)")
+		else
+			ATW.Print("Bloodrage CD: |cffff9900OFF|r (use on CD for rage)")
+		end
+
+	elseif strfind(cmd, "^bloodragecd%s+") or strfind(cmd, "^brcd%s+") then
+		-- /atw bloodragecd on|off
+		local _, _, arg = strfind(cmd, "^%S+%s+(.+)")
+		arg = strlower(arg or "")
+		if arg == "on" then
+			AutoTurtleWarrior_Config.BloodrageBurstMode = true
+			ATW.Print("Bloodrage CD: |cff00ff00ON|r (soft-sync with DW, rage economy priority)")
+		elseif arg == "off" then
+			AutoTurtleWarrior_Config.BloodrageBurstMode = false
+			ATW.Print("Bloodrage CD: |cffff9900OFF|r (use on CD for rage)")
+		else
+			ATW.Print("Usage: /atw bloodragecd [on|off]")
+		end
+
 	elseif cmd == "aoemode" or cmd == "aoetoggle" then
 		-- Toggle AoE mode (auto vs single target)
 		if AutoTurtleWarrior_Config.AoEEnabled == nil then
@@ -813,6 +839,7 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw reck [on|off] - Toggle Recklessness")
 		ATW.Print("  /atw sustain - Disable all CDs")
 		ATW.Print("  /atw sync [on|off] - Racials wait for DW")
+		ATW.Print("  /atw bloodragecd [on|off] - Bloodrage as burst CD")
 		ATW.Print("  /atw pummel [on|off] - Auto-interrupt")
 		ATW.Print("  /atw aoemode [on|off] - AoE/single target")
 		ATW.Print("  /atw rendspread [on|off] - Rend spreading")

@@ -178,6 +178,28 @@ function ATW.Rotation(chainDepth)
 	                      abilityName == "Perception")
 
 	if isSelfBuff then
+		-- BLOODRAGE CHARGE BLOCK: Don't cast Bloodrage if Charge is available
+		-- (Bloodrage puts us in combat, preventing Charge)
+		-- The simulator still computes it for timeline, but we block execution here
+		if abilityName == "Bloodrage" and not UnitAffectingCombat("player") then
+			local dist = ATW.GetDistance and ATW.GetDistance("target") or nil
+			if dist and dist >= 8 and dist <= 25 and ATW.Ready("Charge") then
+				ATW.Debug("Bloodrage blocked: Charge available")
+				-- Instead of chaining (simulator would return Bloodrage again),
+				-- directly handle Charge or stance switch
+				local currentStance = ATW.Stance()
+				if currentStance == 1 then
+					-- Already in Battle Stance, cast Charge directly
+					ATW.Cast("Charge", true)
+				else
+					-- Need stance switch first
+					ATW.Debug("Stance -> Battle for Charge")
+					CastShapeshiftForm(1)
+				end
+				return
+			end
+		end
+
 		-- ability.name contains the actual spell name (from Abilities.lua)
 		ATW.CastSelf(ability.name)
 
