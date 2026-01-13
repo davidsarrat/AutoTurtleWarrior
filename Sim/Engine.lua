@@ -2164,8 +2164,14 @@ function Engine.CaptureCurrentState()
 	-- - Out of combat + in Charge range: NOT in melee (need to Charge first!)
 	-- This ensures Charge is properly valued vs buffs like Perception
 	---------------------------------------
+	-- Use horizontal distance (2D) for Charge and melee range validation
+	-- This ignores height differences when on ramps/stairs (< 6 yards vertical)
+	-- Matches how vanilla WoW Charge and melee combat work (see CMaNGOS Spell.cpp)
 	state.targetDistance = nil
-	if ATW.GetDistance then
+	if ATW.GetHorizontalDistance then
+		state.targetDistance = ATW.GetHorizontalDistance("target")
+	elseif ATW.GetDistance then
+		-- Fallback to 3D distance if horizontal not available
 		state.targetDistance = ATW.GetDistance("target")
 	end
 
