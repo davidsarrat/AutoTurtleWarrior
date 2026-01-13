@@ -55,6 +55,12 @@ ATW.State = {
 	OldStance = nil,
 	Dancing = nil,
 	Attacking = nil,
+
+	-- GUARDRAILS: Last known spell readiness (for detecting when spells go on cooldown)
+	-- These track if Overpower/Pummel were ready on the last check
+	-- If they transition from ready -> not ready, we know they were used
+	LastOverpowerReady = false,  -- Was Overpower off-cooldown last check?
+	LastPummelReady = false,     -- Was Pummel off-cooldown last check?
 }
 
 ---------------------------------------

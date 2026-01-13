@@ -99,10 +99,13 @@ function ATW.Rotation(chainDepth)
 	end
 
 	-- Clear expired states
+	-- Overpower proc window: 4 seconds (vanilla mechanic)
 	if state.Overpower and GetTime() - state.Overpower > 4 then
 		state.Overpower = nil
 	end
-	if state.Interrupt and GetTime() - state.Interrupt > 2 then
+	-- Interrupt window: depends on cast time, but clear old legacy state
+	if state.Interrupt and GetTime() - state.Interrupt > 10 then
+		-- 10 second safety timeout (most casts are shorter)
 		state.Interrupt = nil
 	end
 
@@ -248,20 +251,14 @@ function ATW.Rotation(chainDepth)
 	elseif abilityName == "Pummel" then
 		if targetGUID and ATW.ExecuteInterrupt then
 			-- Use interrupt system with GUID targeting
-			local success = ATW.ExecuteInterrupt(targetGUID)
-			if success then
-				-- Clear casting tracker for this target
-				if ATW.CastingTracker then
-					ATW.CastingTracker.OnCastEnd(targetGUID)
-				end
-			end
+			ATW.ExecuteInterrupt(targetGUID)
+			-- NOTE: Do NOT clear state.Interrupt here!
+			-- Guardrail will detect when Pummel goes on cooldown and clear it automatically
 		else
 			-- Fallback: cast on current target
 			ATW.Cast(ability.name, true)
-		end
-		-- Clear legacy interrupt state
-		if ATW.State then
-			ATW.State.Interrupt = nil
+			-- NOTE: Do NOT clear state.Interrupt!
+			-- Guardrail will handle clearing when Pummel goes on CD
 		end
 
 	elseif abilityName == "SweepingStrikes" then
@@ -279,8 +276,9 @@ function ATW.Rotation(chainDepth)
 		else
 			-- Fallback if iteration function not available
 			ATW.Cast(ability.name, true)
-			state.Overpower = nil
 		end
+		-- NOTE: Do NOT clear state.Overpower here!
+		-- Guardrail will detect when Overpower goes on cooldown and clear it automatically
 
 	elseif abilityName == "HeroicStrike" or abilityName == "Cleave" then
 		-- CRITICAL: Check if already queued - calling again would TOGGLE (cancel) it!

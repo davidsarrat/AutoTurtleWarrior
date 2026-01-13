@@ -285,8 +285,10 @@ function ATW.ExecuteInterrupt(targetGUID)
 	-- Use Pummel
 	ATW.Cast("Pummel", true)
 
-	-- Mark cast as ended (we interrupted it)
-	ATW.CastingTracker.OnCastEnd(targetGUID)
+	-- NOTE: Do NOT clear the cast here!
+	-- - If Pummel succeeds, the guardrail will detect it going on cooldown
+	-- - If Pummel fails, the enemy is still casting and we need to keep tracking
+	-- - UNIT_CASTEVENT will naturally clear when cast ends ("CAST" or "FAIL" event)
 
 	-- Return to previous target (if different)
 	if oldTargetGUID and oldTargetGUID ~= targetGUID then

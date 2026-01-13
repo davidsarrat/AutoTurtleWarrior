@@ -28,6 +28,8 @@ EventFrame:RegisterEvent("CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE")
 -- Rend failure detection (out of range, etc.)
 EventFrame:RegisterEvent("UI_ERROR_MESSAGE")
 EventFrame:RegisterEvent("CHAT_MSG_SPELL_FAILED_LOCALPLAYER")
+-- Spell cast success detection (for guardrails: Overpower, Pummel)
+EventFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_BUFF")
 -- Stats updates
 EventFrame:RegisterEvent("UNIT_AURA")
 EventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
@@ -87,8 +89,14 @@ EventFrame:SetScript("OnEvent", function()
 		ATW.Print("Loaded | Primary: " .. stanceName)
 
 	elseif event == "PLAYER_TARGET_CHANGED" then
-		state.Overpower = nil
+		-- NOTE: Do NOT clear state.Overpower here!
+		-- Overpower procs are GLOBAL in vanilla - you can use them on any target
+		-- Clearing on target change would waste procs when switching targets
+
+		-- Clear old combat-log-based interrupt state (target-specific)
+		-- The new CastingTracker system doesn't use this, but keep for backward compat
 		state.Interrupt = nil
+
 		ATW.ResetTTD()
 		ATW.LoadTalents()
 		-- Learn creature type for bleed immunity detection
@@ -145,13 +153,15 @@ EventFrame:SetScript("OnEvent", function()
 					local _, _, name = strfind(arg1, "was dodged by (.+)%.$")
 					ATW.SetOverpowerProc(name)
 				end
-			elseif strfind(arg1, "Your Overpower") and strfind(arg1, "hits") then
-				-- Overpower HIT - clear the proc and iteration state
+			elseif strfind(arg1, "Your Overpower") and (strfind(arg1, "hits") or strfind(arg1, "crits")) then
+				-- Overpower HIT/CRIT - success callback
+				-- NOTE: Guardrail now handles clearing via cooldown detection
 				if ATW.OnOverpowerSuccess then
 					ATW.OnOverpowerSuccess()
-				else
-					state.Overpower = nil
 				end
+			elseif strfind(arg1, "Your Pummel") and (strfind(arg1, "hits") or strfind(arg1, "crits")) then
+				-- Pummel HIT/CRIT - success (interrupt landed)
+				-- NOTE: Guardrail now handles clearing via cooldown detection
 			end
 		end
 		-- Track swing timer (for HS/Cleave)
@@ -185,6 +195,15 @@ EventFrame:SetScript("OnEvent", function()
 		-- Detect "You failed to cast X" messages
 		if arg1 and ATW.ParseRendFailure then
 			ATW.ParseRendFailure(arg1)
+		end
+		-- NOTE: Guardrails now handle Overpower/Pummel via cooldown detection
+		-- If the spell fails, it won't go on cooldown, so the proc/interrupt stays active
+
+	elseif event == "CHAT_MSG_SPELL_SELF_BUFF" then
+		-- Detect successful spell casts (if needed for other purposes)
+		-- NOTE: Guardrails now use cooldown detection instead of combat log parsing
+		if arg1 then
+			-- Reserved for future use
 		end
 
 	-- Stats updates

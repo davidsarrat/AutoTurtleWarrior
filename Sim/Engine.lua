@@ -2389,6 +2389,51 @@ function Engine.GetValidActions(state)
 	local stanceCdReady = (state.stanceGcdEnd or 0) <= 0
 
 	---------------------------------------
+	-- GUARDRAILS: Direct Cooldown Verification
+	-- Check if Overpower/Pummel just went on cooldown (meaning they were used)
+	-- If they're still off-cooldown but should have been used, keep recommending
+	---------------------------------------
+
+	-- Check current readiness
+	local overpowerCurrentlyReady = ATW.Ready and ATW.Ready("Overpower")
+	local pummelCurrentlyReady = ATW.Ready and ATW.Ready("Pummel")
+
+	-- OVERPOWER GUARDRAIL: Detect if it just went on cooldown
+	if ATW.State then
+		if ATW.State.LastOverpowerReady and not overpowerCurrentlyReady then
+			-- Overpower transitioned from ready -> not ready = it was used!
+			-- Clear the proc
+			if ATW.State.Overpower then
+				ATW.Debug("Overpower detected on cooldown - proc consumed")
+				ATW.State.Overpower = nil
+			end
+			-- Also clear iteration state
+			if ATW.OverpowerIteration then
+				ATW.OverpowerIteration.targets = {}
+				ATW.OverpowerIteration.index = 0
+			end
+		end
+		ATW.State.LastOverpowerReady = overpowerCurrentlyReady
+	end
+
+	-- PUMMEL GUARDRAIL: Detect if it just went on cooldown
+	if ATW.State then
+		if ATW.State.LastPummelReady and not pummelCurrentlyReady then
+			-- Pummel transitioned from ready -> not ready = it was used successfully!
+			-- Clear the old combat-log-based interrupt state (backward compatibility)
+			if ATW.State.Interrupt then
+				ATW.Debug("Pummel detected on cooldown - interrupt consumed")
+				ATW.State.Interrupt = nil
+			end
+			-- NOTE: Do NOT clear CastingTracker here!
+			-- - UNIT_CASTEVENT will naturally clear it when the cast ends ("FAIL" event)
+			-- - If we clear it here, we lose tracking for other casting enemies
+			-- - If Pummel missed/failed somehow, the enemy might still be casting
+		end
+		ATW.State.LastPummelReady = pummelCurrentlyReady
+	end
+
+	---------------------------------------
 	-- STANCE SWITCH ACTIONS
 	-- These are explicit actions the simulator can choose
 	-- Value comes from enabling abilities + Berserker crit bonus
