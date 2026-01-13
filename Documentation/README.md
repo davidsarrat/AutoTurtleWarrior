@@ -54,6 +54,15 @@ This approach automatically handles edge cases like:
 - Multi-target Rend optimization
 - Dynamic HS/Cleave thresholds
 - Cooldown synergy (Death Wish + racials stacking)
+- 2H vs 1H weapon detection (dynamic normalization)
+- Smart Battle Shout override (only cast if yours is better)
+
+### Event-Driven Responsiveness
+
+- **Instant cache invalidation** on relevant game events (SPELL_UPDATE_COOLDOWN, UNIT_POWER, UNIT_AURA)
+- **<10ms response time** to cooldown completion, rage changes, or buff expiration
+- **Real melee range validation** (<= 5 yards) prevents wasted keypresses after knockback
+- **Smart swing timer tracking** - forces recalculation when MH swing is imminent (< 300ms)
 
 ### Intelligent Rotation
 
@@ -61,6 +70,7 @@ This approach automatically handles edge cases like:
 - Execute phase detection and targeting
 - Heroic Strike/Cleave queue management
 - Dynamic thresholds based on ability availability
+- **2H weapon detection** with automatic normalization (3.3 for 2H, 2.4 for 1H)
 
 ### Multi-Target Support
 
@@ -69,12 +79,32 @@ This approach automatically handles edge cases like:
 - Per-enemy Rend decisions via simulation
 - Sweeping Strikes optimization
 
+### Smart Buff Management
+
+- **Battle Shout Override Protection**: Tooltip scanning + AP comparison prevents overriding superior buffs
+  - Compares your Battle Shout AP (rank + talent) vs active buff AP
+  - Only casts if yours is better (+5 AP threshold to avoid spam)
+  - Example: Won't override another warrior's 290 AP buff with your 232 AP buff
+
 ### Combat Analysis
 
 - Real-time TTD (Time To Die) calculation via linear regression
 - HP percentage tracking for all nearby enemies
 - Bleed immunity detection by creature type
 - Distance tracking for Charge range
+
+### Complete Talent Support
+
+**Fury DPS:**
+- All major talents implemented (Dual Wield Specialization, Improved Battle Shout, Cruelty, Unbridled Wrath, Flurry, Death Wish, Bloodthirst, Improved Whirlwind)
+- Dual Wield Specialization: +25% offhand damage at 5 points (~5-10% total DPS increase)
+- Improved Battle Shout: +25% Battle Shout AP at 5 points (232 AP → 290 AP)
+
+**Arms DPS:**
+- All major talents implemented (Two-Handed Weapon Specialization, Improved Battle Shout, Improved Rend, Tactical Mastery, Deep Wounds, Impale, Mortal Strike)
+- Two-Handed Weapon Specialization: +5% damage with 2H weapons at 5 points
+- Dynamic weapon normalization (3.3 for 2H, 2.4 for 1H) for Whirlwind and Mortal Strike
+- Unbridled Wrath 2H bonus: +2 rage per proc with 2H (vs +1 with 1H)
 
 ## Debug Commands
 

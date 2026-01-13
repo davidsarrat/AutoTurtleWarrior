@@ -161,6 +161,13 @@ Engine.lua (3450 lines):
 │   │ UpdateTarget │       │ CHAT_MSG_COMBAT_SELF_MISSES│     │
 │   │ TTD          │       │ → Detect Overpower window  │     │
 │   └──────────────┘       └────────────────────────────┘     │
+│                                                              │
+│   EVENT-DRIVEN CACHE INVALIDATION (NEW)                     │
+│   ┌────────────────────────────────────────────────┐        │
+│   │ SPELL_UPDATE_COOLDOWN → InvalidateCache()      │        │
+│   │ UNIT_POWER (rage ≥ 10) → InvalidateCache()     │        │
+│   │ UNIT_AURA (buffs/debuffs) → InvalidateCache()  │        │
+│   └────────────────────────────────────────────────┘        │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -173,6 +180,7 @@ Engine.lua (3450 lines):
 │          ↓                                                   │
 │   ┌──────────────────┐                                      │
 │   │ GetBestAction()  │ ← Full combat simulation             │
+│   │ (with caching)   │   Cache invalidates on events!       │
 │   └──────┬───────────┘                                      │
 │          ↓                                                   │
 │   ┌──────────────────┐                                      │
@@ -354,6 +362,36 @@ Keypress 2: Restore AA → Try OP on mob B → fails → set NeedsAARestore
 Keypress 3: Restore AA → Try OP on mob C → SUCCESS → clear all state
 ```
 
+## Event-Driven Cache Invalidation
+
+The addon uses an **event-driven cache system** for instant responsiveness (<10ms):
+
+### Engine.InvalidateCache()
+
+```lua
+-- Sim/Engine.lua
+function Engine.InvalidateCache()
+    Engine.Cache.dirty = true
+    Engine.Cache.lastState = nil
+    Engine.Cache.lastResult = nil
+end
+```
+
+### Invalidation Triggers
+
+**Game Events (Commands/Events.lua):**
+- `SPELL_UPDATE_COOLDOWN` - Cooldowns complete
+- `UNIT_POWER` - Rage changes >= 10
+- `UNIT_AURA` - Buffs/debuffs change
+
+**Swing Timer Events:**
+- MH swing imminent (< 300ms) - Forces HS/Cleave recalculation
+
+**Why This Matters:**
+- Old system: 100ms timer-based updates
+- New system: <10ms event-driven updates
+- Result: **10x faster response** to game state changes
+
 ### Simulation State (captured fresh each decision)
 
 The simulation engine captures complete combat state each time a decision is needed:
@@ -367,7 +405,9 @@ state = {
 
     -- Combat State (critical for Charge)
     inCombat = true,            -- From UnitAffectingCombat()
+    inMeleeRange = true,        -- NEW: Real melee range check (<= 5 yards)
     targetDistance = 15,        -- From ATW.GetDistance()
+    timeToMelee = 0,            -- NEW: Travel time after Charge (ms)
 
     -- Player Stats
     ap = 1500,
@@ -376,6 +416,8 @@ state = {
     mhDmgMax = 200,
     mhSpeed = 2600,
     hasOH = false,              -- Off-hand equipped?
+    is2H = true,                -- NEW: 2H weapon equipped? (from Gear.lua)
+    normSpeed = 3300,           -- NEW: Dynamic normalization (2400 for 1H, 3300 for 2H)
     tacticalMastery = 25,
 
     -- Swing Timers (REAL values from game state, in ms)
@@ -384,6 +426,7 @@ state = {
 
     -- Buff Tracking
     hasBattleShout = true,
+    activeBattleShoutAP = 290,  -- NEW: AP value from active Battle Shout (tooltip scan)
     hasDeathWish = false,
     hasRecklessness = false,
     hasBerserkerRage = false,

@@ -269,6 +269,18 @@ ATW.Talents.OPCrit = r * 25
 _, _, _, _, r = GetTalentInfo(1, 11)
 ATW.Talents.DeepWounds = r
 
+-- Two-Handed Weapon Specialization (tier 6, 5 points)
+-- +1/2/3/4/5% damage with 2H weapons
+-- Usually slot 7, but scanned by NAME for reliability
+ATW.Talents.TwoHandSpec = 0
+for i = 1, 30 do
+    local name, _, _, _, rank = GetTalentInfo(1, i)
+    if name and string.find(name, "Two-Handed Weapon Specialization") then
+        ATW.Talents.TwoHandSpec = rank  -- 0-5 points
+        break
+    end
+end
+
 -- Impale (tier 6, slot 2)
 -- +10/20% crit damage on abilities
 _, _, _, _, r = GetTalentInfo(1, 12)
@@ -286,13 +298,25 @@ ATW.Talents.HasMS = r > 0
 ### Fury Tree Talents
 
 ```lua
+-- Improved Battle Shout (tier 2, 5 points)
+-- +5/10/15/20/25% Battle Shout AP
+-- Scanned by NAME since position may vary in TurtleWoW
+ATW.Talents.ImprovedBattleShout = 0
+for i = 1, 30 do
+    local name, _, _, _, rank = GetTalentInfo(2, i)
+    if name and string.find(name, "Improved Battle Shout") then
+        ATW.Talents.ImprovedBattleShout = rank  -- 0-5 points
+        break
+    end
+end
+
 -- Cruelty (tier 1, slot 2)
 -- +1/2/3/4/5% crit chance
 _, _, _, _, r = GetTalentInfo(2, 2)
 ATW.Talents.Cruelty = r
 
 -- Unbridled Wrath (tier 2, slot 3)
--- 8/16/24/32/40% chance for +1 rage on hit
+-- 8/16/24/32/40% chance for +1 rage on hit (1H) or +2 rage (2H in TurtleWoW)
 _, _, _, _, r = GetTalentInfo(2, 5)
 ATW.Talents.UnbridledWrath = r * 8
 
@@ -305,6 +329,18 @@ ATW.Talents.ExecCost = 15 - math.floor(r * 2.5)
 -- On crit, +10/15/20/25/30% attack speed for 3 swings
 _, _, _, _, r = GetTalentInfo(2, 12)
 ATW.Talents.Flurry = r
+
+-- Dual Wield Specialization (tier 6, 5 points)
+-- +5/10/15/20/25% offhand weapon damage
+-- Scanned by NAME since position may vary in TurtleWoW
+ATW.Talents.DualWieldSpec = 0
+for i = 1, 30 do
+    local name, _, _, _, rank = GetTalentInfo(2, i)
+    if name and string.find(name, "Dual Wield Specialization") then
+        ATW.Talents.DualWieldSpec = rank  -- 0-5 points
+        break
+    end
+end
 
 -- Death Wish (tier 7, slot 1)
 _, _, _, _, r = GetTalentInfo(2, 13)
@@ -328,6 +364,16 @@ TurtleWoW has modified some spells and talents from vanilla:
 | Rend Duration | 9/12/15/18/21/21/21s | 10/13/16/19/22/22/22s |
 | Improved Rend | 3 pts, +15/25/35% dmg | 2 pts, +10/20% dmg |
 | Unbridled Wrath | +1 rage | +1 rage (1H), +2 rage (2H) |
+| Weapon Normalization | 2.4 for all weapons | 2.4 (1H), 3.3 (2H) |
+| Two-Hand Weapon Spec | 3 pts, +1/2/3% dmg | 5 pts, +1/2/3/4/5% dmg |
+| Dual Wield Spec | N/A (vanilla) | 5 pts, +5/10/15/20/25% OH dmg |
+
+**Critical Implementation Notes:**
+- **2H Detection**: Uses `GetItemInfo()` inventoryType check (INVTYPE_2HWEAPON)
+- **Dynamic Normalization**: Whirlwind and Mortal Strike use 3.3 normalization with 2H, 2.4 with 1H
+- **Unbridled Wrath Bonus**: Applied in rage generation - checks `is2H` flag
+- **Dual Wield Spec**: Applied in `ProcessHit()` after crit calculation when `isOH = true`
+- **Two-Hand Spec**: Applied in `GetDamageMod()` when `is2H = true`
 
 ## Rend Data by Rank (TurtleWoW)
 
@@ -385,6 +431,141 @@ function ATW.GetRendDamage()
     return baseDamage
 end
 ```
+
+## Battle Shout System
+
+### Smart Battle Shout Override
+
+The addon implements an intelligent Battle Shout system that **prevents overriding superior buffs** from other warriors:
+
+**Problem:**
+- Multiple warriors can cast Battle Shout
+- Different ranks give different AP (Rank 1: 15 AP, Rank 7: 232 AP)
+- Improved Battle Shout talent adds +25% AP at 5 points (232 AP → 290 AP)
+- Without protection, a low-rank Battle Shout can overwrite a better one
+
+**Solution: Tooltip Scanning + AP Comparison**
+
+#### GetActiveBattleShoutAP() (Core/Helpers.lua)
+
+```lua
+function ATW.GetActiveBattleShoutAP()
+    -- Create hidden tooltip for scanning
+    if not ATW_ScanTooltip then
+        ATW_ScanTooltip = CreateFrame("GameTooltip", "ATW_ScanTooltip", UIParent, "GameTooltipTemplate")
+        ATW_ScanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    end
+
+    -- Find Battle Shout buff index
+    local buffIndex = 0
+    for i = 1, 32 do
+        local texture = UnitBuff("player", i)
+        if texture and strfind(texture, "Ability_Warrior_BattleShout") then
+            buffIndex = i
+            break
+        end
+    end
+
+    if buffIndex == 0 then
+        return 0  -- No Battle Shout active
+    end
+
+    -- Scan tooltip and extract AP value
+    ATW_ScanTooltip:ClearLines()
+    ATW_ScanTooltip:SetUnitBuff("player", buffIndex)
+
+    -- Parse patterns: "by 232" or "232 attack power"
+    for i = 1, ATW_ScanTooltip:NumLines() do
+        local line = getglobal("ATW_ScanTooltipTextLeft" .. i)
+        if line then
+            local text = line:GetText()
+            if text then
+                local _, _, apValue = strfind(text, "by (%d+)")
+                if apValue then return tonumber(apValue) end
+
+                local _, _, apValue2 = strfind(text, "(%d+)%s+attack power")
+                if apValue2 then return tonumber(apValue2) end
+            end
+        end
+    end
+
+    return 0  -- Couldn't parse
+end
+```
+
+#### State Capture (Sim/Engine.lua)
+
+```lua
+-- In CaptureCurrentState():
+state.hasBattleShout = ATW.Buff and ATW.Buff("player", "Ability_Warrior_BattleShout")
+state.activeBattleShoutAP = 0
+if state.hasBattleShout and ATW.GetActiveBattleShoutAP then
+    state.activeBattleShoutAP = ATW.GetActiveBattleShoutAP()
+end
+```
+
+#### Comparison Logic (Sim/Engine.lua)
+
+```lua
+-- In GetValidActions():
+if hasSpell("BattleShout") then
+    local bsCost = 10
+    local shouldCast = false
+
+    if not state.hasBattleShout then
+        shouldCast = true  -- No buff active
+    else
+        -- Compare AP values
+        local ourBattleShoutAP = ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or 232
+        local activeBattleShoutAP = state.activeBattleShoutAP or 0
+
+        -- Only override if ours is BETTER (+5 AP threshold to avoid spam)
+        if ourBattleShoutAP > (activeBattleShoutAP + 5) then
+            shouldCast = true
+        end
+    end
+
+    if shouldCast and rage >= bsCost then
+        table.insert(actions, {name = "BattleShout", rage = bsCost})
+    end
+end
+```
+
+### Battle Shout Ranks (Vanilla/TurtleWoW)
+
+```
+Rank 1: 15 AP   (level 1)
+Rank 2: 35 AP   (level 12)
+Rank 3: 55 AP   (level 22)
+Rank 4: 85 AP   (level 32)
+Rank 5: 130 AP  (level 42)
+Rank 6: 185 AP  (level 52)
+Rank 7: 232 AP  (level 60)
+
+With Improved Battle Shout (5 points): +25%
+Rank 7 + 5/5 Improved: 290 AP (MAXIMUM)
+```
+
+### Examples
+
+**Scenario 1**: No buff active
+- **Action**: Cast your Battle Shout
+- ✅ Correct
+
+**Scenario 2**: Active buff = 130 AP (Rank 5), yours = 290 AP
+- **Comparison**: 290 > (130 + 5) = TRUE
+- **Action**: Cast your Battle Shout (override)
+- ✅ Correct (yours is much better)
+
+**Scenario 3**: Active buff = 290 AP, yours = 232 AP
+- **Comparison**: 232 > (290 + 5) = FALSE
+- **Action**: Don't cast (keep better buff)
+- ✅ Correct (theirs is better)
+
+**Scenario 4**: Active buff = 285 AP, yours = 290 AP
+- **Comparison**: 290 > (285 + 5) = FALSE (within threshold)
+- **Action**: Don't cast (essentially equal)
+- ✅ Correct (avoid spam for minor differences)
 
 ## When Data is Loaded
 
