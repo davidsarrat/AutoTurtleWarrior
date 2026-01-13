@@ -2066,8 +2066,14 @@ function Engine.CaptureCurrentState()
 		end
 	end
 
-	-- Battle Shout status
+	-- Battle Shout status and AP value
 	state.hasBattleShout = ATW.Buff and ATW.Buff("player", "Ability_Warrior_BattleShout")
+	-- Read the AP value of the active Battle Shout (via tooltip scanning)
+	-- This allows us to compare and only override if ours is better
+	state.activeBattleShoutAP = 0
+	if state.hasBattleShout and ATW.GetActiveBattleShoutAP then
+		state.activeBattleShoutAP = ATW.GetActiveBattleShoutAP()
+	end
 
 	---------------------------------------
 	-- BUFF TRACKING for cooldown abilities
@@ -2574,10 +2580,29 @@ function Engine.GetValidActions(state)
 
 	---------------------------------------
 	-- Battle Shout (any stance, 10 rage)
+	-- Smart override: Only cast if no buff OR if ours is better
 	---------------------------------------
-	if hasSpell("BattleShout") and not state.hasBattleShout then
+	if hasSpell("BattleShout") then
 		local bsCost = 10
-		if rage >= bsCost then
+		local shouldCast = false
+
+		if not state.hasBattleShout then
+			-- No Battle Shout active - cast ours
+			shouldCast = true
+		else
+			-- Battle Shout is active - compare AP values
+			-- Calculate OUR Battle Shout AP (rank + Improved BS talent)
+			local ourBattleShoutAP = ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or 232
+			local activeBattleShoutAP = state.activeBattleShoutAP or 0
+
+			-- Only override if ours is BETTER (more AP)
+			-- Add 5 AP threshold to avoid spamming on equal values
+			if ourBattleShoutAP > (activeBattleShoutAP + 5) then
+				shouldCast = true
+			end
+		end
+
+		if shouldCast and rage >= bsCost then
 			table.insert(actions, {name = "BattleShout", rage = bsCost})
 		end
 	end

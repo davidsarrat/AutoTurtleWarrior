@@ -80,6 +80,60 @@ function ATW.Buff(unit, texture)
 	return false
 end
 
+---------------------------------------
+-- Get Battle Shout AP from active buff (tooltip scanning)
+-- Returns: AP value from the active Battle Shout buff, or 0 if not found
+---------------------------------------
+function ATW.GetActiveBattleShoutAP()
+	-- Create hidden tooltip for scanning (reuse if exists)
+	if not ATW_ScanTooltip then
+		ATW_ScanTooltip = CreateFrame("GameTooltip", "ATW_ScanTooltip", UIParent, "GameTooltipTemplate")
+		ATW_ScanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+	end
+
+	-- Find Battle Shout buff index
+	local buffIndex = 0
+	for i = 1, 32 do
+		local texture = UnitBuff("player", i)
+		if texture and strfind(texture, "Ability_Warrior_BattleShout") then
+			buffIndex = i
+			break
+		end
+	end
+
+	if buffIndex == 0 then
+		return 0  -- No Battle Shout active
+	end
+
+	-- Scan the tooltip
+	ATW_ScanTooltip:ClearLines()
+	ATW_ScanTooltip:SetUnitBuff("player", buffIndex)
+
+	-- Read tooltip lines to find AP value
+	-- Battle Shout tooltip format: "Increases the attack power of party members within 30 yards by X."
+	-- We need to parse the number from the tooltip
+	for i = 1, ATW_ScanTooltip:NumLines() do
+		local line = getglobal("ATW_ScanTooltipTextLeft" .. i)
+		if line then
+			local text = line:GetText()
+			if text then
+				-- Look for patterns like "by 232" or "by 290"
+				local _, _, apValue = strfind(text, "by (%d+)")
+				if apValue then
+					return tonumber(apValue)
+				end
+				-- Alternative pattern: "X attack power"
+				local _, _, apValue2 = strfind(text, "(%d+)%s+attack power")
+				if apValue2 then
+					return tonumber(apValue2)
+				end
+			end
+		end
+	end
+
+	return 0  -- Couldn't parse AP value
+end
+
 function ATW.Debuff(unit, texture)
 	local i = 1
 	while UnitDebuff(unit, i) do
