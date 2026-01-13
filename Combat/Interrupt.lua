@@ -290,9 +290,13 @@ function ATW.ExecuteInterrupt(targetGUID)
 	-- - If Pummel fails, the enemy is still casting and we need to keep tracking
 	-- - UNIT_CASTEVENT will naturally clear when cast ends ("CAST" or "FAIL" event)
 
-	-- Return to previous target (if different)
+	-- ROBUST: Return to previous target and restore auto-attack
 	if oldTargetGUID and oldTargetGUID ~= targetGUID then
 		pcall(function() TargetUnit(oldTargetGUID) end)
+		-- Restore auto-attack on original target
+		if UnitExists("target") then
+			AttackTarget()
+		end
 	elseif not hadTarget then
 		ClearTarget()
 	end

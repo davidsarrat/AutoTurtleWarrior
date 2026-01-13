@@ -74,15 +74,18 @@ end
 --
 -- NOTE: Stance is handled by the simulator as a first-class action.
 -- This function assumes we're already in the correct stance.
+--
+-- ROBUST: Always restores target and auto-attack after casting
 ---------------------------------------
 function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 	-- Always get current target GUID for explicit targeting
-	local _, targetGuid = UnitExists("target")
+	local hadTarget = UnitExists("target")
+	local _, originalTargetGuid = UnitExists("target")
 
 	if not guid then
 		-- No GUID specified, use current target with explicit GUID
-		if targetGuid and targetGuid ~= "" then
-			CastSpellByName("Execute", targetGuid)
+		if originalTargetGuid and originalTargetGuid ~= "" then
+			CastSpellByName("Execute", originalTargetGuid)
 		else
 			CastSpellByName("Execute")
 		end
@@ -91,8 +94,8 @@ function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 
 	if not ATW.HasSuperWoW or not ATW.HasSuperWoW() then
 		-- No SuperWoW, cast on current target with explicit GUID
-		if targetGuid and targetGuid ~= "" then
-			CastSpellByName("Execute", targetGuid)
+		if originalTargetGuid and originalTargetGuid ~= "" then
+			CastSpellByName("Execute", originalTargetGuid)
 		else
 			CastSpellByName("Execute")
 		end
@@ -100,8 +103,12 @@ function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 	end
 
 	-- Check if guid is current target - still use explicit GUID!
-	if targetGuid == guid then
-		CastSpellByName("Execute", targetGuid)
+	if originalTargetGuid == guid then
+		CastSpellByName("Execute", originalTargetGuid)
+		-- Ensure auto-attack is active
+		if not UnitAffectingCombat("player") or not UnitIsUnit("target", "playertarget") then
+			AttackTarget()
+		end
 		return true
 	end
 
@@ -111,10 +118,22 @@ function ATW.GUIDTargeting.CastExecuteOnGUID(guid)
 		CastSpellByName("Execute", guid)
 	end)
 
-	-- Flag that we need to restore AA to main target (will be handled next frame)
-	-- This avoids calling AttackTarget() in the same frame as the cast
-	if ok and targetGuid then
-		ATW.State.NeedsAARestore = targetGuid
+	-- ROBUST: Immediately restore original target and auto-attack
+	if ok and originalTargetGuid and originalTargetGuid ~= guid then
+		-- Re-target original target
+		pcall(function() TargetUnit(originalTargetGuid) end)
+
+		-- Restore auto-attack on original target
+		if UnitExists("target") then
+			AttackTarget()
+		end
+
+		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+			ATW.Debug("Execute: restored target + AA after casting on secondary")
+		end
+	elseif not hadTarget then
+		-- No original target, clear target after casting
+		ClearTarget()
 	end
 
 	return ok
@@ -231,8 +250,9 @@ end
 -- NOTE: Stance is handled by the simulator as a first-class action.
 -- This function assumes we're already in the correct stance.
 --
--- ROBUST DESIGN: SuperWoW's UNIT_CASTEVENT will confirm the cast
--- automatically if it succeeds.
+-- ROBUST DESIGN:
+-- - SuperWoW's UNIT_CASTEVENT will confirm the cast automatically if it succeeds
+-- - Always restores original target and auto-attack after casting
 ---------------------------------------
 function ATW.GUIDTargeting.CastRendOnGUID(guid)
 	if not guid then return false end
@@ -258,19 +278,32 @@ function ATW.GUIDTargeting.CastRendOnGUID(guid)
 		end
 	end
 
-	-- Check if casting on a different target than current
-	local _, currentTargetGUID = UnitExists("target")
-	local castingOnDifferentTarget = (currentTargetGUID and guid ~= currentTargetGUID)
+	-- Save original target state
+	local hadTarget = UnitExists("target")
+	local _, originalTargetGUID = UnitExists("target")
+	local castingOnDifferentTarget = (originalTargetGUID and guid ~= originalTargetGUID)
 
 	-- SuperWoW GUID targeting: CastSpellByName(spell, unit) works with GUIDs
 	local castOk, err = pcall(function()
 		CastSpellByName("Rend", guid)
 	end)
 
-	-- Flag that we need to restore AA to main target (will be handled next frame)
-	-- This avoids calling AttackTarget() in the same frame as the cast
-	if castOk and castingOnDifferentTarget and currentTargetGUID then
-		ATW.State.NeedsAARestore = currentTargetGUID
+	-- ROBUST: Immediately restore original target and auto-attack
+	if castOk and castingOnDifferentTarget and originalTargetGUID then
+		-- Re-target original target
+		pcall(function() TargetUnit(originalTargetGUID) end)
+
+		-- Restore auto-attack on original target
+		if UnitExists("target") then
+			AttackTarget()
+		end
+
+		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
+			ATW.Debug("Rend: restored target + AA after casting on secondary")
+		end
+	elseif castOk and not hadTarget then
+		-- No original target, clear target after casting
+		ClearTarget()
 	end
 
 	return castOk
