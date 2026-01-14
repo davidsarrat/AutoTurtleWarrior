@@ -399,6 +399,32 @@ function ATW.HandleCommand(msg)
 			ATW.Print("Usage: /atw bloodragecd [on|off]")
 		end
 
+	elseif cmd == "brcombat" or cmd == "bloodragecombat" then
+		-- Toggle Bloodrage combat-only mode
+		if AutoTurtleWarrior_Config.BloodrageCombatOnly == nil then
+			AutoTurtleWarrior_Config.BloodrageCombatOnly = ATW.DEFAULT.BloodrageCombatOnly
+		end
+		AutoTurtleWarrior_Config.BloodrageCombatOnly = not AutoTurtleWarrior_Config.BloodrageCombatOnly
+		if AutoTurtleWarrior_Config.BloodrageCombatOnly then
+			ATW.Print("Bloodrage Combat: |cff00ff00ON|r (only in combat)")
+		else
+			ATW.Print("Bloodrage Combat: |cffff9900OFF|r (can use out of combat)")
+		end
+
+	elseif strfind(cmd, "^brcombat%s+") or strfind(cmd, "^bloodragecombat%s+") then
+		-- /atw brcombat on|off
+		local _, _, arg = strfind(cmd, "^%S+%s+(.+)")
+		arg = strlower(arg or "")
+		if arg == "on" then
+			AutoTurtleWarrior_Config.BloodrageCombatOnly = true
+			ATW.Print("Bloodrage Combat: |cff00ff00ON|r (only in combat)")
+		elseif arg == "off" then
+			AutoTurtleWarrior_Config.BloodrageCombatOnly = false
+			ATW.Print("Bloodrage Combat: |cffff9900OFF|r (can use out of combat)")
+		else
+			ATW.Print("Usage: /atw brcombat [on|off]")
+		end
+
 	elseif cmd == "aoemode" or cmd == "aoetoggle" then
 		-- Toggle AoE mode (auto vs single target)
 		if AutoTurtleWarrior_Config.AoEEnabled == nil then
@@ -840,6 +866,7 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw sustain - Disable all CDs")
 		ATW.Print("  /atw sync [on|off] - Racials wait for DW")
 		ATW.Print("  /atw bloodragecd [on|off] - Bloodrage as burst CD")
+		ATW.Print("  /atw brcombat [on|off] - Bloodrage in combat only")
 		ATW.Print("  /atw pummel [on|off] - Auto-interrupt")
 		ATW.Print("  /atw aoemode [on|off] - AoE/single target")
 		ATW.Print("  /atw rendspread [on|off] - Rend spreading")

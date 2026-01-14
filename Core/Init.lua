@@ -43,6 +43,10 @@ ATW.DEFAULT = {
 	-- TurtleWoW (Nov 2024): Bloodrage can crit and proc Enrage (+15% dmg for 8s)
 	-- Source: https://forum.turtle-wow.org/viewtopic.php?t=16775
 	BloodrageBurstMode = true,
+	-- Bloodrage Combat Only: only use Bloodrage while in combat (default: true)
+	-- When true: Bloodrage only used in combat (avoids pre-pull waste)
+	-- When false: Bloodrage can be used out of combat (pre-pull rage)
+	BloodrageCombatOnly = true,
 }
 
 ---------------------------------------

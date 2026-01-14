@@ -2749,11 +2749,20 @@ function Engine.GetValidActions(state)
 	if hasSpell("Bloodrage") then
 		local bloodrageReady = (state.cooldowns.Bloodrage or 0) <= 0
 		if bloodrageReady and not state.hasBloodrageActive then
+			-- Check combat-only setting (default: true)
+			local combatOnly = AutoTurtleWarrior_Config.BloodrageCombatOnly
+			if combatOnly == nil then combatOnly = true end
+
+			local shouldUse = true
+
+			-- Combat-only check
+			if combatOnly and not state.inCombat then
+				shouldUse = false
+			end
+
 			-- Check CD mode
 			local cdMode = AutoTurtleWarrior_Config.BloodrageBurstMode
 			if cdMode == nil then cdMode = true end
-
-			local shouldUse = true
 
 			if cdMode then
 				-- In CD mode: check BurstEnabled toggle (off in sustain)
