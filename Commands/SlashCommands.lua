@@ -880,7 +880,7 @@ function ATW.HandleCommand(msg)
 		ATW.Print("  /atw aoe - AoE/Rend strategy analysis")
 		ATW.Print("  /atw rend - Rend decision debug")
 		ATW.Print("  /atw racial - Racial abilities")
-		ATW.Print("  /atw spells | talents | gear | mob")
+		ATW.Print("  /atw spells | gear | mob | has")
 		ATW.Print("  /atw stance | stats | ttd | swing | op")
 	end
 end

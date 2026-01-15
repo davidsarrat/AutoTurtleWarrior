@@ -1,6 +1,8 @@
 # AutoTurtleWarrior Documentation
 
-A comprehensive Fury Warrior rotation addon for TurtleWoW (1.12 vanilla client with custom extensions).
+A **simulation-based** Fury Warrior rotation addon for TurtleWoW (1.12 vanilla client with custom extensions).
+
+> **Note**: This addon was built primarily as an experiment in simulation-driven decision making ("for science"). While fully functional for actual gameplay, the main goal was exploring whether a simulation approach could outperform traditional priority lists.
 
 ## Table of Contents
 
@@ -19,8 +21,8 @@ A comprehensive Fury Warrior rotation addon for TurtleWoW (1.12 vanilla client w
 ## Requirements
 
 - **TurtleWoW Client** - Modified 1.12 vanilla client
-- **SuperWoW** - Required for GUID-based unit functions
-- **UnitXP_SP3** - Required for extended unit information
+- **SuperWoW** ([SuperAPI](https://github.com/balakethelock/SuperAPI)) - Required for GUID-based unit functions
+- **UnitXP_SP3** ([GitHub](https://github.com/balakethelock/UnitXP_SP3)) - Required for extended unit information
 
 ## Quick Start
 
@@ -39,11 +41,11 @@ The addon uses a **100% simulation-based approach** (Zebouski-style) with **no h
 
 1. **Capture State** - Snapshot full combat state (all enemies, buffs, cooldowns, combat state)
 2. **Generate Actions** - List all valid actions using `hasSpell()` checks (only learned spells!)
-3. **Simulate Each** - For each action, simulate **9 seconds** (6 GCDs) tactical horizon
+3. **Simulate Each** - For each action, simulate configurable tactical horizon
 4. **Compare Damage** - Pick the action that yields highest total damage
 
 **Single-Layer Tactical Simulation:**
-- Runs every frame (with caching): Decides immediate ability with 9s lookahead
+- Runs every frame (with caching): Decides immediate ability with configurable lookahead
 - Cooldowns controlled via manual toggles (`/atw burst`, `/atw reckless`)
 - Optional CD sync waits for Death Wish before using racials (`/atw sync`)
 
@@ -111,7 +113,6 @@ This approach automatically handles edge cases like:
 | Command | Description |
 |---------|-------------|
 | `/atw spells` | Show detected spell ranks |
-| `/atw talents` | Show detected talent values |
 | `/atw decision` | Show simulation comparison for all actions |
 | `/atw rendtest` | Debug Rend detection methods |
 | `/atw ttd` | Show TTD tracking info |
@@ -119,6 +120,14 @@ This approach automatically handles edge cases like:
 | `/atw mob` | Show creature type detection |
 | `/atw aoe` | Show AoE analysis |
 | `/atw sim` | Run damage simulation |
+| `/atw horizon` | Show/set tactical horizon (3-120s) |
+| `/atw cache` | Show cache statistics |
+| `/atw racial` | Show racial abilities |
+| `/atw has` | Show cached available abilities |
+| `/atw cd` | Show cooldown status and toggles |
+| `/atw gear` | Show weapon detection info |
+| `/atw stance` | Show stance info |
+| `/atw swing` | Show swing timer info |
 
 ## File Structure
 
@@ -182,7 +191,7 @@ GetBestAction()
         ├── GetValidActions()          -- Only LEARNED spells + CD sync
         │   └── Racials wait for DW if SyncCooldowns enabled
         └── For each action:
-                SimulateDecisionHorizon()  -- Simulate 9s (6 GCDs)
+                SimulateDecisionHorizon()  -- Simulate configured horizon
                         └── Greedy best action for remaining time
                                 └── Sum total damage
                                         └── Return highest
@@ -192,6 +201,8 @@ The simulation handles complex mechanics automatically:
 - **Charge**: Only valid if `not inCombat` and target at 8-25 yards
 - **Slam**: Resets swing timer (penalty factored in)
 - **Bloodrage**: Sets `inCombat = true` (blocks Charge if used first)
+  - `BloodrageCombatOnly` (default ON): Only use in combat
+  - `BloodrageBurstMode` (default ON): Soft-sync with Death Wish
 - **Battle Shout**: Does NOT trigger combat (can cast before Charge)
 - **HS/Cleave**: Dynamic threshold - drops when main abilities on cooldown
 - **Cooldowns**: Respects BurstEnabled/RecklessEnabled toggles

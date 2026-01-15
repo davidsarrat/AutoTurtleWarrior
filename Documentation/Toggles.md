@@ -58,6 +58,10 @@ AutoTurtleWarrior_Config = {
     AoEEnabled = true,       -- Auto AoE based on enemy count
     RendSpread = true,       -- Spread Rend to multiple targets
 
+    -- Bloodrage
+    BloodrageBurstMode = true,   -- Soft-sync with Death Wish
+    BloodrageCombatOnly = true,  -- Only use in combat
+
     -- Utility
     PummelEnabled = true,    -- Auto-interrupt (see Interrupt.md)
 }
@@ -113,6 +117,29 @@ AutoTurtleWarrior_Config = {
 /atw rendspread on  - Enable Rend spreading
 /atw rendspread off - Disable Rend spreading (main target only)
 ```
+
+### Bloodrage Toggles
+
+```
+/atw bloodragecd    - Toggle BloodrageBurstMode (soft-sync with DW)
+/atw bloodragecd on - Enable burst mode (wait for DW if rage > 40)
+/atw bloodragecd off - Disable burst mode (use on CD)
+
+/atw brcombat       - Toggle BloodrageCombatOnly
+/atw brcombat on    - Only use Bloodrage in combat (default)
+/atw brcombat off   - Allow Bloodrage out of combat (pre-pull rage)
+```
+
+**BloodrageBurstMode** (default: ON):
+- Soft-syncs Bloodrage with Death Wish
+- If rage > 40 and DW coming in < 15s, waits for DW
+- Emergency override: Always uses if rage < 30
+- Respects BurstEnabled toggle (off in sustain mode)
+
+**BloodrageCombatOnly** (default: ON):
+- Prevents Bloodrage use out of combat
+- Avoids wasting the short buff duration pre-pull
+- Turn OFF if you want pre-pull rage generation
 
 ### Utility Toggles
 
