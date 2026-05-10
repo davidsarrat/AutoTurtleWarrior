@@ -170,6 +170,14 @@ function ATW.HandleCommand(msg)
 			ATW.Print("Gear module not loaded")
 		end
 
+	elseif cmd == "trinkets" or cmd == "trinket" then
+		-- Show trinket slots, on-use info, and shared internal CD
+		if ATW.Trinkets and ATW.Trinkets.PrintState then
+			ATW.Trinkets.PrintState()
+		else
+			ATW.Print("Trinkets module not loaded")
+		end
+
 	elseif cmd == "rend" then
 		-- Show Rend status via decision simulator
 		if ATW.Engine and ATW.Engine.PrintDecisionDebug then

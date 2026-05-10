@@ -441,6 +441,21 @@ function Engine.InitPlayer(state)
 		end
 	end
 
+	-- Conditional bonuses based on current target creature type
+	-- (Mark of the Champion vs Undead/Demons, Seal of the Dawn vs Undead)
+	if ATW.GetConditionalGearBonuses then
+		local condBonuses = ATW.GetConditionalGearBonuses("target")
+		if condBonuses.str and condBonuses.str > 0 then
+			state.ap = state.ap + (condBonuses.str * 2)
+		end
+		if condBonuses.ap and condBonuses.ap > 0 then
+			state.ap = state.ap + condBonuses.ap
+		end
+		if condBonuses.crit and condBonuses.crit > 0 then
+			state.crit = state.crit + condBonuses.crit
+		end
+	end
+
 	-- Store set bonus effects for later use
 	if ATW.GetSetBonusEffects then
 		state.setEffects = ATW.GetSetBonusEffects()

@@ -352,6 +352,62 @@ function Strategic.PlanCooldowns(state, plan)
 			}
 		end
 	end
+
+	---------------------------------------
+	-- TRINKETS - On-use trinkets in slots 13/14
+	-- Use ASAP when off-CD (per-slot + shared 30s internal CD).
+	-- Priority comes from each trinket's data (haste > AP > misc).
+	-- Save high-priority trinkets for execute phase if it's coming soon.
+	---------------------------------------
+	if cdAllowed("Trinkets") and ATW.Trinkets and ATW.Trinkets.GetSlotTrinket then
+		for _, slot in ipairs({13, 14}) do
+			local trinket = ATW.Trinkets.GetSlotTrinket(slot)
+			if trinket then
+				local ready, remaining = ATW.Trinkets.GetReady(slot)
+				local key = "Trinket" .. slot
+				local pri = trinket.data.priority or 50
+
+				if ready then
+					-- Save high-priority trinkets (haste/dmg buffs) for execute
+					-- phase if it's within 20s and the trinket has CD <= 120s
+					-- (so it'll be back up after we use it pre-execute).
+					local trinketCD = (trinket.data.onuse and trinket.data.onuse.cooldown) or 120
+					local saveForExecute = (pri >= 70)
+						and timeToExecute and timeToExecute < 20000
+						and trinketCD > timeToExecute / 1000
+
+					if plan.phase == "execute" then
+						plan.cooldowns[key] = {
+							action = "use_now",
+							reason = "Execute phase: " .. trinket.name,
+							priority = pri + 20,  -- bonus for execute window
+							trinketSlot = slot,
+						}
+					elseif saveForExecute then
+						plan.cooldowns[key] = {
+							action = "save",
+							reason = trinket.name .. ": save for execute in "
+								.. string.format("%.0f", timeToExecute/1000) .. "s",
+							useAt = "execute_phase",
+						}
+					else
+						plan.cooldowns[key] = {
+							action = "use_now",
+							reason = trinket.name .. " (slot " .. slot .. ")",
+							priority = pri,
+							trinketSlot = slot,
+						}
+					end
+				else
+					plan.cooldowns[key] = {
+						action = "wait",
+						reason = trinket.name .. " on CD " .. string.format("%.0f", remaining) .. "s",
+						waitTime = remaining * 1000,
+					}
+				end
+			end
+		end
+	end
 end
 
 ---------------------------------------

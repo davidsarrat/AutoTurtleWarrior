@@ -11,6 +11,7 @@ Core\Helpers.lua
 # Player
 Player\Stats.lua
 Player\TTD.lua
+Player\Trinkets.lua
 Player\Gear.lua
 Player\Talents.lua
 
@@ -20,6 +21,7 @@ Combat\Casting.lua
 Combat\SwingTimer.lua
 Combat\GUIDTargeting.lua
 Combat\Interrupt.lua
+Combat\Trinkets.lua
 
 # Detection
 Detection\Distance.lua

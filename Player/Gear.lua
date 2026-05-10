@@ -90,66 +90,8 @@ ATW.SetBonuses = {
 
 ---------------------------------------
 -- Trinket Definitions
+-- Data lives in Player/Trinkets.lua (auto-generated). Loaded before this file.
 ---------------------------------------
-ATW.Trinkets = {
-	-- AP Boost Trinkets
-	["Diamond Flask"] = {
-		slot = "trinket",
-		effect = "diamond_flask",
-		stats = { str = 75 },  -- +75 STR for 60s
-		duration = 60,
-		cooldown = 360,
-	},
-	["Jom Gabbar"] = {
-		slot = "trinket",
-		effect = "jom_gabbar",
-		stats = { ap = 65 },  -- Stacking +65 AP
-		stacks = true,
-		maxStacks = 10,
-		duration = 20,
-		cooldown = 120,
-	},
-	["Badge of the Swarmguard"] = {
-		slot = "trinket",
-		effect = "swarmguard",
-		arpen = 200,  -- Stacking armor pen
-		stacks = true,
-		maxStacks = 6,
-		duration = 30,
-		cooldown = 180,
-	},
-	["Slayer's Crest"] = {
-		slot = "trinket",
-		effect = "slayers_crest",
-		stats = { ap = 64 },
-		passive = true,
-	},
-	["Drake Fang Talisman"] = {
-		slot = "trinket",
-		effect = "drake_fang",
-		stats = { ap = 56, hit = 2 },
-		passive = true,
-	},
-	["Blackhand's Breadth"] = {
-		slot = "trinket",
-		effect = "blackhands",
-		stats = { crit = 2 },
-		passive = true,
-	},
-	["Hand of Justice"] = {
-		slot = "trinket",
-		effect = "hand_of_justice",
-		stats = { ap = 20 },
-		proc = { chance = 2, effect = "extra_attack" },  -- 2% chance extra attack
-	},
-	["Kiss of the Spider"] = {
-		slot = "trinket",
-		effect = "kiss_spider",
-		stats = { haste = 20, crit = 1, hit = 1 },
-		duration = 15,
-		cooldown = 120,
-	},
-}
 
 ---------------------------------------
 -- Weapon Enchant Definitions
@@ -267,16 +209,18 @@ end
 function ATW.ScanTrinkets()
 	ATW.Gear.trinkets = {}
 
+	if not ATW.TrinketDB then return end
+
 	-- Trinket slots: 13, 14
 	for _, slot in ipairs({13, 14}) do
 		local link = GetInventoryItemLink("player", slot)
 		if link then
 			local _, _, name = string.find(link, "%[(.+)%]")
-			if name and ATW.Trinkets[name] then
+			if name and ATW.TrinketDB[name] then
 				table.insert(ATW.Gear.trinkets, {
 					name = name,
 					slot = slot,
-					data = ATW.Trinkets[name],
+					data = ATW.TrinketDB[name],
 				})
 			end
 		end
@@ -415,10 +359,12 @@ function ATW.GetGearStatBonuses()
 		haste = 0,
 	}
 
-	-- Passive trinket stats
+	-- Passive trinket stats. Skip conditional bonuses (vs Undead/Demons) —
+	-- those need target type detection and are added separately by callers
+	-- via ATW.GetConditionalGearBonuses(unit).
 	for _, trinket in ipairs(ATW.Gear.trinkets) do
-		if trinket.data.passive and trinket.data.stats then
-			for stat, value in pairs(trinket.data.stats) do
+		if trinket.data.passive and not trinket.data.appliesAgainst then
+			for stat, value in pairs(trinket.data.passive) do
 				bonuses[stat] = (bonuses[stat] or 0) + value
 			end
 		end
@@ -427,6 +373,43 @@ function ATW.GetGearStatBonuses()
 	-- Active enchant buffs
 	if ATW.Gear.enchants.crusader and ATW.Gear.enchants.crusader.active then
 		bonuses.str = bonuses.str + 100
+	end
+
+	return bonuses
+end
+
+---------------------------------------
+-- Get conditional gear bonuses for a target's creature type.
+-- Trinkets like Mark of the Champion (vs Undead/Demons) and Seal of the
+-- Dawn (vs Undead) only grant their AP bonus against matching mobs.
+-- Returns: { ap, str, crit, hit, haste, ... } table with applicable bonuses.
+---------------------------------------
+function ATW.GetConditionalGearBonuses(unit)
+	local bonuses = { str = 0, agi = 0, ap = 0, crit = 0, hit = 0, haste = 0 }
+
+	if not unit or not UnitExists(unit) then return bonuses end
+	if not ATW.Gear or not ATW.Gear.trinkets then return bonuses end
+
+	local creatureType = ATW.GetCreatureType and ATW.GetCreatureType(unit) or nil
+	if not creatureType or creatureType == "Unknown" then return bonuses end
+
+	for _, trinket in ipairs(ATW.Gear.trinkets) do
+		local cond = trinket.data.appliesAgainst
+		if cond and trinket.data.passive then
+			local matches = false
+			if type(cond) == "string" then
+				matches = (cond == creatureType)
+			elseif type(cond) == "table" then
+				for _, t in ipairs(cond) do
+					if t == creatureType then matches = true; break end
+				end
+			end
+			if matches then
+				for stat, value in pairs(trinket.data.passive) do
+					bonuses[stat] = (bonuses[stat] or 0) + value
+				end
+			end
+		end
 	end
 
 	return bonuses

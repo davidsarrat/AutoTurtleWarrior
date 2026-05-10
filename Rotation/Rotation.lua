@@ -129,10 +129,23 @@ function ATW.Rotation(chainDepth)
 	-- 2. An ability to cast -> execute normally
 	---------------------------------------
 
-	local abilityName, isStanceSwitch, targetStance, targetGUID, isOffGCD = ATW.GetNextAbility()
+	local abilityName, isStanceSwitch, targetStance, targetGUID, isOffGCD, isTrinketUse, trinketSlot = ATW.GetNextAbility()
 
 	if not abilityName then
 		ATW.Debug("No ability available")
+		return
+	end
+
+	---------------------------------------
+	-- TRINKET USE
+	-- Off-GCD action. Press the trinket and chain into the next decision so
+	-- this keypress also fires a regular ability if one is ready.
+	---------------------------------------
+	if isTrinketUse and trinketSlot then
+		if ATW.Trinkets and ATW.Trinkets.Use then
+			ATW.Trinkets.Use(trinketSlot)
+		end
+		ATW.Rotation(chainDepth + 1)
 		return
 	end
 

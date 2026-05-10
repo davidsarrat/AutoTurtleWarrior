@@ -404,6 +404,28 @@ function ATW.GetNextAbility()
 		return nil
 	end
 
+	---------------------------------------
+	-- TRINKETS: off-GCD, no rage cost. If the strategic planner says to use
+	-- a trinket NOW, do it before evaluating abilities. The actual press is
+	-- off-GCD so the next call will pick the regular ability.
+	---------------------------------------
+	if ATW.Strategic and ATW.Strategic.GetPlan and ATW.Trinkets and ATW.Trinkets.PickSlot then
+		local trinketSlot = ATW.Trinkets.PickSlot()
+		if trinketSlot then
+			-- Check the strategic plan agrees this slot's trinket should be used
+			local state = ATW.Engine.CaptureCurrentState and ATW.Engine.CaptureCurrentState() or nil
+			if state then
+				local plan = ATW.Strategic.GetPlan(state)
+				local trinketKey = "Trinket" .. trinketSlot
+				local cdPlan = plan and plan.cooldowns and plan.cooldowns[trinketKey]
+				if cdPlan and cdPlan.action == "use_now" then
+					-- Return as trinket-use action (off-GCD, isOffGCD=true)
+					return "UseTrinket", false, nil, nil, true, true, trinketSlot
+				end
+			end
+		end
+	end
+
 	local ok, abilityName, isOffGCD, pooling, timeToExecute, targetGUID, targetStance, isStanceSwitch = pcall(ATW.Engine.GetRecommendation)
 
 	if not ok then
@@ -424,7 +446,8 @@ function ATW.GetNextAbility()
 	-- Return action info
 	-- isStanceSwitch tells Rotation to use CastShapeshiftForm
 	-- isOffGCD tells Rotation to chain the next action after this one
-	return abilityName, isStanceSwitch, targetStance, targetGUID, isOffGCD
+	-- (6th return) isTrinketUse, (7th) trinketSlot — both nil/false here
+	return abilityName, isStanceSwitch, targetStance, targetGUID, isOffGCD, false, nil
 end
 
 ---------------------------------------
@@ -718,6 +741,7 @@ ATW.BURST_COOLDOWNS = {
 	BloodFury = true,
 	Berserking = true,
 	Perception = true,
+	Trinkets = true,
 }
 
 ATW.RECKLESS_COOLDOWNS = {
