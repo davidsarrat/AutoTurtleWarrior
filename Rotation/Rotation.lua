@@ -123,6 +123,48 @@ function ATW.Rotation(chainDepth)
 	end
 
 	---------------------------------------
+	-- Anti-CC: break Fear/Sap/Mind Control with Berserker Rage.
+	-- Triggers GCD, so we return after firing — next press resumes normal flow.
+	---------------------------------------
+	if ATW.AntiCC and ATW.AntiCC.TryBreak then
+		if ATW.AntiCC.TryBreak() then
+			return
+		end
+	end
+
+	---------------------------------------
+	-- Defensive consumables (off-GCD). HP-based: healing potion, healthstone,
+	-- Lifeblood. Picked by Consumables.PickDefensive() based on HP%.
+	---------------------------------------
+	if ATW.Consumables and ATW.Consumables.PickDefensive then
+		local def = ATW.Consumables.PickDefensive()
+		if def and ATW.Consumables.UsePickedKind(def) then
+			-- Off-GCD; chain into the regular rotation this same press
+			ATW.Rotation(chainDepth + 1)
+			return
+		end
+	end
+
+	---------------------------------------
+	-- Offensive consumables (off-GCD): Mighty Rage Potion sync with bursts,
+	-- Sapper Charge in AoE windows, Dynamite/Grenade single-target. Gated by
+	-- the Burst toggle (uses BURST_COOLDOWNS check via IsCooldownAllowed).
+	---------------------------------------
+	if ATW.Consumables and ATW.Consumables.PickOffensive
+	   and ATW.IsCooldownAllowed and ATW.IsCooldownAllowed("Consumables") then
+		local burstState = {
+			deathwishActive = ATW.Buff and ATW.Buff("player", "Spell_Shadow_DeathPact") or false,
+			recklessnessActive = ATW.Buff and ATW.Buff("player", "Ability_CriticalStrike") or false,
+			enemyCount = (ATW.MeleeEnemyCount and ATW.MeleeEnemyCount()) or 1,
+		}
+		local off = ATW.Consumables.PickOffensive(burstState)
+		if off and ATW.Consumables.UsePickedKind(off) then
+			ATW.Rotation(chainDepth + 1)
+			return
+		end
+	end
+
+	---------------------------------------
 	-- Simulator-Based Priority
 	-- The simulator returns either:
 	-- 1. A stance switch action (isStanceSwitch=true) -> CastShapeshiftForm

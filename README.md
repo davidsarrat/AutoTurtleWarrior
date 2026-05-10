@@ -58,10 +58,6 @@ Provides extended unit information functions.
 
 The tactical horizon determines how far ahead the simulator looks when comparing actions. Longer horizons consider more future GCDs but may be less responsive to immediate changes.
 
-## Documentation
-
-For detailed documentation on architecture, simulation engine, and all systems, see the [Documentation](Documentation/) folder.
-
 ## Features
 
 - Simulation-based decision making (no hardcoded priorities)
@@ -73,3 +69,10 @@ For detailed documentation on architecture, simulation engine, and all systems, 
 - Cooldown synergy optimization (Death Wish + Racials)
 - 2H and Dual Wield weapon support
 - Event-driven cache invalidation for instant response
+- Trinket auto-press with shared internal CD tracking (24 trinkets)
+- Conditional gear bonuses (Mark of the Champion etc. vs Undead/Demons)
+- Auto consumables: healing potion / healthstone / Lifeblood at low HP
+- Engineering items (Sapper Charge, Dense Dynamite) in burst/AoE windows
+- Mighty Rage Potion sync with Death Wish bursts
+- Berserker Rage anti-Fear/Sap auto-cast
+- Intercept gap closer in Berserker stance

@@ -178,6 +178,22 @@ function ATW.HandleCommand(msg)
 			ATW.Print("Trinkets module not loaded")
 		end
 
+	elseif cmd == "consumables" or cmd == "consum" then
+		-- Show bag consumables (potions, healthstone, engineering items) and CDs
+		if ATW.Consumables and ATW.Consumables.PrintState then
+			ATW.Consumables.PrintState()
+		else
+			ATW.Print("Consumables module not loaded")
+		end
+
+	elseif cmd == "anticc" or cmd == "cc" then
+		-- Show player debuffs and Berserker Rage readiness for fear breaking
+		if ATW.AntiCC and ATW.AntiCC.PrintState then
+			ATW.AntiCC.PrintState()
+		else
+			ATW.Print("AntiCC module not loaded")
+		end
+
 	elseif cmd == "rend" then
 		-- Show Rend status via decision simulator
 		if ATW.Engine and ATW.Engine.PrintDecisionDebug then

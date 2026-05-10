@@ -742,6 +742,7 @@ ATW.BURST_COOLDOWNS = {
 	Berserking = true,
 	Perception = true,
 	Trinkets = true,
+	Consumables = true,
 }
 
 ATW.RECKLESS_COOLDOWNS = {

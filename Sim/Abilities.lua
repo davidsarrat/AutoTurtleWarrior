@@ -496,6 +496,25 @@ Abilities.Charge = {
 	end,
 }
 
+Abilities.Intercept = {
+	name = "Intercept",
+	rage = 10,
+	cd = 30,
+	stance = {3},  -- Berserker only
+	gcd = true,
+	isCooldown = false,
+	damage = function(stats)
+		-- Stun + minor damage; main value is uptime restoration after a knockback
+		return 0
+	end,
+	condition = function(state)
+		-- Use during combat when target is out of melee but in intercept range
+		if not UnitAffectingCombat("player") then return false end
+		local dist = ATW.GetDistance and ATW.GetDistance("target")
+		return dist and dist >= 8 and dist <= 25
+	end,
+}
+
 ---------------------------------------
 -- Racial Abilities (TurtleWoW)
 ---------------------------------------

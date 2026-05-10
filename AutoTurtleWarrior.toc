@@ -1,6 +1,6 @@
 ## Interface: 12000
 ## Title: Auto Turtle Warrior
-## Notes: TurtleWoW Fury Warrior rotation helper
+## Notes: TurtleWoW fully-automated Warrior rotation
 ## Author: Sarrat
 ## SavedVariables: AutoTurtleWarrior_Config
 
@@ -22,6 +22,8 @@ Combat\SwingTimer.lua
 Combat\GUIDTargeting.lua
 Combat\Interrupt.lua
 Combat\Trinkets.lua
+Combat\Consumables.lua
+Combat\AntiCC.lua
 
 # Detection
 Detection\Distance.lua
