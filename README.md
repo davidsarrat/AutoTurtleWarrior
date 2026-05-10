@@ -1,6 +1,6 @@
 # AutoTurtleWarrior
 
-A **simulation-based** Fury Warrior rotation addon for TurtleWoW.
+A fully automated **simulation-based** Warrior DPS rotation addon for TurtleWoW.
 
 > **Note**: This addon was built primarily as an experiment in simulation-driven decision making ("for science"). It implements a full combat simulator with rage modeling, swing timers, and multi-target tracking. While fully functional for actual gameplay, the main goal was exploring whether a simulation approach could outperform traditional priority lists.
 
@@ -21,7 +21,7 @@ Provides GUID-based unit functions for precise targeting and distance calculatio
 
 Provides extended unit information functions.
 
-- **Download**: [UnitXP_SP3 on GitHub](https://github.com/balakethelock/UnitXP_SP3)
+- **Download**: [UnitXP_SP3 on Codeberg](https://codeberg.org/konaka/UnitXP_SP3)
 - **Installation**: Extract to `Interface\AddOns\UnitXP_SP3`
 
 ## Installation
