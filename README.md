@@ -6,10 +6,6 @@ A fully automated **simulation-based** Warrior DPS rotation addon for TurtleWoW.
 
 Unlike traditional priority-based addons, this addon simulates multiple actions forward in time and picks the one that yields the highest total damage over a configurable tactical horizon.
 
-## Acknowledgements
-
-Thanks to [Zebouski](https://github.com/Zebouski) for [WarriorSim-TurtleWoW](https://github.com/Zebouski/WarriorSim-TurtleWoW), which served as an important inspiration and reference for this addon's simulation model and TurtleWoW Warrior mechanics.
-
 ## Requirements
 
 This addon requires two additional addons to function:
@@ -90,3 +86,9 @@ The tactical horizon defaults to 9 seconds. Longer horizons consider more future
 - Mighty Rage Potion sync with Death Wish bursts
 - Berserker Rage anti-Fear/Sap auto-cast
 - Intercept gap closer in Berserker stance
+
+## Acknowledgements
+
+Thanks to [Zebouski](https://github.com/Zebouski) for [WarriorSim-TurtleWoW](https://github.com/Zebouski/WarriorSim-TurtleWoW), which served as an important inspiration and reference for this addon's simulation model and TurtleWoW Warrior mechanics.
+
+Thanks to [Hekili](https://github.com/Hekili) for [Hekili](https://github.com/Hekili/hekili), whose rotation-helper addon was an early inspiration and reference point for the recommendation flow.
