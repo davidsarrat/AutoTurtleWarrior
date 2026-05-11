@@ -32,7 +32,8 @@
 
 ---------------------------------------
 -- Spell Data Tables (by rank)
--- All values from Zebouski/WarriorSim-TurtleWoW
+-- Values use Zebouski/WarriorSim-TurtleWoW as a base and are adjusted for
+-- current TurtleWoW Warrior class changes where the live mechanics differ.
 ---------------------------------------
 
 -- Rend: base total damage, duration in seconds
@@ -74,13 +75,13 @@ ATW.HeroicStrikeData = {
 	[9] = { bonus = 157, level = 60 },
 }
 
--- Mortal Strike: bonus damage (uses normalized weapon damage)
+-- Mortal Strike: TurtleWoW uses percent weapon damage by rank
 ATW.MortalStrikeData = {
-	-- [rank] = { bonus, level }
-	[1] = { bonus = 105, level = 40 },
-	[2] = { bonus = 110, level = 48 },
-	[3] = { bonus = 115, level = 54 },
-	[4] = { bonus = 120, level = 60 },
+	-- [rank] = { multiplier, level }
+	[1] = { multiplier = 1.05, level = 40 },
+	[2] = { multiplier = 1.10, level = 48 },
+	[3] = { multiplier = 1.15, level = 54 },
+	[4] = { multiplier = 1.20, level = 60 },
 }
 
 -- Cleave: bonus damage per target (hits 2 targets)
@@ -131,11 +132,14 @@ ATW.BattleShoutData = {
 	[7] = { ap = 232, level = 60 },
 }
 
--- Bloodthirst: TurtleWoW formula is 200 + AP * 0.35
--- Only 1 rank (talent ability)
+-- Bloodthirst: TurtleWoW current formula is rank base + AP * 0.30
 ATW.BloodthirstData = {
-	base = 200,
-	apCoeff = 0.35,
+	-- [rank] = { base, level }
+	[1] = { base = 80,  level = 40 },
+	[2] = { base = 100, level = 48 },
+	[3] = { base = 120, level = 56 },
+	[4] = { base = 150, level = 60 },
+	apCoeff = 0.30,
 }
 
 -- Whirlwind: uses normalized weapon damage, no bonus
@@ -261,9 +265,13 @@ end
 
 function ATW.GetExecuteCoeff()
 	local rank = ATW.Spells and ATW.Spells.ExecuteRank or 0
-	if rank <= 0 then return 15 end  -- Default to max
-	local data = ATW.ExecuteData[rank]
-	return data and data.coeff or 15
+	local data = rank > 0 and ATW.ExecuteData[rank] or nil
+	local coeff = data and data.coeff or 15
+	local precisionCut = ATW.Talents and ATW.Talents.PrecisionCut or 0
+	if precisionCut > 0 then
+		coeff = coeff * (1 + precisionCut * 0.25)
+	end
+	return coeff
 end
 
 ---------------------------------------
@@ -277,13 +285,17 @@ function ATW.GetHeroicStrikeBonus()
 end
 
 ---------------------------------------
--- Mortal Strike: Get bonus damage
+-- Mortal Strike: Get percent weapon damage multiplier
 ---------------------------------------
-function ATW.GetMortalStrikeBonus()
+function ATW.GetMortalStrikeMultiplier()
 	local rank = ATW.Spells and ATW.Spells.MortalStrikeRank or 0
-	if rank <= 0 then return 120 end  -- Default to max
+	if rank <= 0 then return 1.20 end  -- Default to max
 	local data = ATW.MortalStrikeData[rank]
-	return data and data.bonus or 120
+	return data and data.multiplier or 1.20
+end
+
+function ATW.GetMortalStrikeBonus()
+	return 0
 end
 
 ---------------------------------------
@@ -345,11 +357,19 @@ function ATW.GetBattleShoutAP()
 end
 
 ---------------------------------------
--- Bloodthirst: Get damage (200 + AP * 0.35)
+-- Bloodthirst: Get damage (rank base + AP * 0.30)
 ---------------------------------------
 function ATW.GetBloodthirstDamage(ap)
 	ap = ap or (ATW.Stats and ATW.Stats.AP) or 1000
-	return ATW.BloodthirstData.base + (ap * ATW.BloodthirstData.apCoeff)
+	local rank = ATW.Spells and ATW.Spells.BloodthirstRank or 0
+	if rank <= 0 then rank = 4 end
+	local data = ATW.BloodthirstData[rank] or ATW.BloodthirstData[4]
+	return data.base + (ap * ATW.BloodthirstData.apCoeff)
+end
+
+function ATW.GetMaxRageCap()
+	local boundless = ATW.Talents and ATW.Talents.BoundlessAnger or 0
+	return 100 + (boundless * 10)
 end
 
 ---------------------------------------
@@ -367,6 +387,7 @@ function ATW.LoadSpells()
 	ATW.Spells.OverpowerRank = ATW.GetMaxSpellRank("Overpower")
 	ATW.Spells.HamstringRank = ATW.GetMaxSpellRank("Hamstring")
 	ATW.Spells.SlamRank = ATW.GetMaxSpellRank("Slam")
+	ATW.Spells.DecisiveStrikeRank = ATW.GetMaxSpellRank("Decisive Strike")
 	ATW.Spells.WhirlwindRank = ATW.GetMaxSpellRank("Whirlwind")
 	ATW.Spells.BattleShoutRank = ATW.GetMaxSpellRank("Battle Shout")
 
@@ -421,7 +442,7 @@ function ATW.LoadSpells()
 		ATW.Print("  BT: " .. (ATW.Spells.BloodthirstRank > 0 and "Yes" or "No") ..
 			" | MS R" .. ATW.Spells.MortalStrikeRank)
 		ATW.Print("  WW R" .. ATW.Spells.WhirlwindRank .. " | Slam R" .. ATW.Spells.SlamRank ..
-			" | Charge R" .. ATW.Spells.ChargeRank)
+			" | DS R" .. ATW.Spells.DecisiveStrikeRank .. " | Charge R" .. ATW.Spells.ChargeRank)
 	end
 end
 
@@ -483,6 +504,26 @@ function ATW.LoadTalents()
 		end
 	end
 
+	-- Precision Cut: +25/50/75% Execute extra-rage damage in current TurtleWoW
+	ATW.Talents.PrecisionCut = 0
+	for i = 1, 30 do
+		local name, _, _, _, rank = GetTalentInfo(1, i)
+		if name and string.find(name, "Precision Cut") then
+			ATW.Talents.PrecisionCut = rank or 0
+			break
+		end
+	end
+
+	-- Boundless Anger: +10/20/30 maximum rage
+	ATW.Talents.BoundlessAnger = 0
+	for i = 1, 30 do
+		local name, _, _, _, rank = GetTalentInfo(1, i)
+		if name and string.find(name, "Boundless Anger") then
+			ATW.Talents.BoundlessAnger = rank or 0
+			break
+		end
+	end
+
 	-- Impale (Arms tier 6, slot 2)
 	-- +10/20% crit damage on abilities
 	_, _, _, _, r = GetTalentInfo(1, 12)
@@ -510,7 +551,7 @@ function ATW.LoadTalents()
 	for tree = 1, 2 do  -- Scan Arms (1) and Fury (2)
 		for i = 1, 30 do
 			local name, _, _, _, rank = GetTalentInfo(tree, i)
-			if name and (string.find(name, "Improved Battle Shout") or string.find(name, "Battle Shout") and string.find(name, "Improved")) then
+			if name and (string.find(name, "Improved Shouts") or string.find(name, "Improved Battle Shout") or string.find(name, "Battle Shout") and string.find(name, "Improved")) then
 				ATW.Talents.ImprovedBattleShout = rank  -- 0-5 points
 				break
 			end
@@ -562,24 +603,30 @@ function ATW.LoadTalents()
 	_, _, _, _, r = GetTalentInfo(2, 13)
 	ATW.Talents.HasDW = r > 0
 
-	-- Improved Berserker Rage (Fury tier 7, slot 3)
-	-- Generates rage when used
-	_, _, _, _, r = GetTalentInfo(2, 15)
-	ATW.Talents.HasIBR = r > 0
+	-- Improved Berserker Rage was removed in current TurtleWoW; scan by name
+	-- for compatibility with older clients instead of trusting shuffled slots.
+	ATW.Talents.HasIBR = false
+	for i = 1, 30 do
+		local name, _, _, _, rank = GetTalentInfo(2, i)
+		if name and string.find(name, "Improved Berserker Rage") then
+			ATW.Talents.HasIBR = (rank or 0) > 0
+			break
+		end
+	end
 
 	-- Bloodthirst (Fury tier 9, slot 1)
 	_, _, _, _, r = GetTalentInfo(2, 17)
 	ATW.Talents.HasBT = r > 0
 
-	-- Improved Whirlwind (Fury tier 5, 3 points) - NEW in 1.17.2
-	-- Reduces Whirlwind cooldown by 1/1.5/2 seconds
-	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
-	-- Index unknown - scan by name
+	-- Ravager / Improved Whirlwind: -1/-1.5/-2s Whirlwind CD and
+	-- current TurtleWoW also reduces Cleave cost by 1/2/3 rage.
 	ATW.Talents.ImprovedWhirlwind = 0
+	ATW.Talents.Ravager = 0
 	for i = 1, 30 do
 		local name, _, _, _, rank = GetTalentInfo(2, i)
-		if name and string.find(name, "Improved Whirlwind") then
-			ATW.Talents.ImprovedWhirlwind = rank  -- 0-3 points
+		if name and (string.find(name, "Ravager") or string.find(name, "Improved Whirlwind")) then
+			ATW.Talents.ImprovedWhirlwind = rank or 0
+			ATW.Talents.Ravager = rank or 0
 			break
 		end
 	end
@@ -636,8 +683,9 @@ function ATW.LoadTalents()
 		ATW.Print("  BT: " .. (ATW.Talents.HasBT and "Yes" or "No") .. " | MS: " .. (ATW.Talents.HasMS and "Yes" or "No"))
 		ATW.Print("  AM: " .. (ATW.Talents.AngerManagement and "Yes" or "No"))
 		ATW.Print("  Master of Arms: " .. (ATW.Talents.MasterOfArms or 0) .. " points")
+		ATW.Print("  Precision Cut: " .. (ATW.Talents.PrecisionCut or 0) .. " | Boundless Anger: " .. (ATW.Talents.BoundlessAnger or 0))
 		ATW.Print("  Improved Execute: " .. (ATW.Talents.ImprovedExecute or 0) .. " points")
-		ATW.Print("  Improved Whirlwind: " .. (ATW.Talents.ImprovedWhirlwind or 0) .. " points")
+		ATW.Print("  Ravager/Improved Whirlwind: " .. (ATW.Talents.ImprovedWhirlwind or 0) .. " points")
 		ATW.Print("  Dual Wield Spec: " .. (ATW.Talents.DualWieldSpec or 0) .. " points")
 		ATW.Print("  Improved Battle Shout: " .. (ATW.Talents.ImprovedBattleShout or 0) .. " points")
 	end
@@ -826,6 +874,7 @@ function ATW.LoadAvailableAbilities()
 	ATW.Has.Overpower = ATW.Spells and ATW.Spells.OverpowerRank and ATW.Spells.OverpowerRank > 0 or false
 	ATW.Has.Whirlwind = ATW.Spells and ATW.Spells.WhirlwindRank and ATW.Spells.WhirlwindRank > 0 or false
 	ATW.Has.Slam = ATW.Spells and ATW.Spells.SlamRank and ATW.Spells.SlamRank > 0 or false
+	ATW.Has.DecisiveStrike = ATW.Spells and ATW.Spells.DecisiveStrikeRank and ATW.Spells.DecisiveStrikeRank > 0 or false
 	ATW.Has.Hamstring = ATW.Spells and ATW.Spells.HamstringRank and ATW.Spells.HamstringRank > 0 or false
 	ATW.Has.BattleShout = ATW.Spells and ATW.Spells.BattleShoutRank and ATW.Spells.BattleShoutRank > 0 or false
 	ATW.Has.Charge = ATW.Spells and ATW.Spells.ChargeRank and ATW.Spells.ChargeRank > 0 or false

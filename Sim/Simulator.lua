@@ -231,6 +231,10 @@ function ATW.GetPriorityList()
 		-- DoT (Rend with AP scaling in TurtleWoW)
 		"Rend",
 
+		-- Casted 2H filler
+		"DecisiveStrike",
+		"Slam",
+
 		-- Rage dumps
 		"Cleave",
 		"HeroicStrike",
@@ -502,11 +506,12 @@ function ATW.SimulateAhead(steps)
 	end
 
 	for i = 1, steps do
+		local rageCap = ATW.GetMaxRageCap and ATW.GetMaxRageCap() or 100
 		-- Advance time to next GCD if needed
 		if simGCD > 0 then
 			-- Add rage for time passing
 			simRage = simRage + (rps * simGCD)
-			if simRage > 100 then simRage = 100 end
+			if simRage > rageCap then simRage = rageCap end
 			simTime = simTime + simGCD
 
 			-- Reduce all cooldowns
@@ -1026,6 +1031,7 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 
 	-- Main simulation loop
 	local nextGCD = 0
+	local rageCap = ATW.GetMaxRageCap and ATW.GetMaxRageCap() or 100
 
 	while simTime < seconds do
 		-- Process DoT ticks (only if target is still alive)
@@ -1106,7 +1112,7 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 				-- Generate rage from hit
 				local rageFromHit = (avgMHDmg / RAGE_CONVERSION) * RAGE_HIT_FACTOR
 				simRage = simRage + rageFromHit
-				if simRage > 100 then simRage = 100 end
+				if simRage > rageCap then simRage = rageCap end
 			end
 
 			nextMHSwing = simTime + mhSpeed
@@ -1123,7 +1129,7 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 			-- Generate rage (50% penalty for OH)
 			local rageFromHit = (avgOHDmg / RAGE_CONVERSION) * RAGE_HIT_FACTOR * OH_RAGE_PENALTY
 			simRage = simRage + rageFromHit
-			if simRage > 100 then simRage = 100 end
+			if simRage > rageCap then simRage = rageCap end
 
 			nextOHSwing = simTime + ohSpeed
 		end
@@ -1227,7 +1233,7 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 				{name = "Overpower", rage = 5, stance = {1}, condition = function()
 					return simTime == 0 and ATW.State.Overpower
 				end},
-				-- Cleave: 2 targets, costs 20 rage, preferred with 2+ enemies
+				-- Cleave: 2 targets, cost can be reduced by Ravager
 				{name = "Cleave", rage = 20, stance = {0}, condition = function()
 					return aliveEnemies >= 2  -- Need 2+ targets in melee (5yd)
 				end},
@@ -1237,10 +1243,11 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 			for _, prio in ipairs(priorities) do
 				local ability = ATW.Abilities[prio.name]
 				if ability and not simCooldowns[prio.name] then
+					local prioCost = ATW.GetRageCost and ATW.GetRageCost(prio.name) or prio.rage
 					-- Check condition
 					if prio.condition and not prio.condition() then
 						-- Skip
-					elseif simRage >= prio.rage then
+					elseif simRage >= prioCost then
 						-- Check stance
 						local validStance = (prio.stance[1] == 0)
 						if not validStance then
@@ -1255,7 +1262,7 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 						-- Stance dance if needed
 						if not validStance then
 							local danceRage = AutoTurtleWarrior_Config.DanceRage or 10
-							if simRage >= prio.rage + danceRage then
+							if simRage >= prioCost + danceRage then
 								simRage = simRage - danceRage
 								simStance = prio.stance[1]
 								validStance = true
@@ -1283,7 +1290,7 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 			-- Handle rage generation from abilities
 			if chosenAbility.rageGen then
 				simRage = simRage + chosenAbility.rageGen
-				if simRage > 100 then simRage = 100 end
+				if simRage > rageCap then simRage = rageCap end
 			end
 
 			-- Check for off-GCD ability from priority (for iteration)
@@ -1338,7 +1345,7 @@ function ATW.SimulateTimeWindow(seconds, strategy)
 			-- No ability available, wait 0.5s
 			simTime = simTime + 0.5
 			simRage = simRage + (rps * 0.5)
-			if simRage > 100 then simRage = 100 end
+			if simRage > rageCap then simRage = rageCap end
 		end
 
 		-- Small time increment to prevent infinite loop

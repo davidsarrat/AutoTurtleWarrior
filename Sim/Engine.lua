@@ -72,8 +72,8 @@ Engine.EXECUTE_BASE = 600      -- Fallback: Rank 5
 Engine.EXECUTE_RAGE_MULT = 15
 
 -- Bloodthirst: ATW.GetBloodthirstDamage(ap)
-Engine.BT_BASE = 200
-Engine.BT_AP_COEFF = 0.35
+Engine.BT_BASE = 150
+Engine.BT_AP_COEFF = 0.30
 
 -- Whirlwind: normalized speed (2.4 for 1H, 3.3 for 2H)
 -- Now dynamic based on equipped weapon
@@ -88,8 +88,8 @@ end
 -- Legacy constant (kept for compatibility, but prefer GetNormalizationSpeed())
 Engine.WW_NORM_SPEED = 2.4
 
--- Mortal Strike: ATW.GetMortalStrikeBonus()
-Engine.MS_BONUS = 120          -- Fallback: Rank 4
+-- Mortal Strike: ATW.GetMortalStrikeMultiplier()
+Engine.MS_MULT = 1.20          -- Fallback: Rank 4
 
 -- Heroic Strike: ATW.GetHeroicStrikeBonus()
 Engine.HS_BONUS = 157          -- Fallback: Rank 9
@@ -102,6 +102,13 @@ Engine.OP_BONUS = 35           -- Fallback: Rank 4
 
 -- Hamstring: ATW.GetHamstringDamage()
 Engine.HAMSTRING_DMG = 45      -- Fallback: Rank 3
+
+function Engine.GetRageCap()
+	if ATW.GetMaxRageCap then
+		return ATW.GetMaxRageCap()
+	end
+	return 100
+end
 
 -- Slam: ATW.GetSlamBonus()
 Engine.SLAM_BONUS = 87         -- Fallback: Rank 4
@@ -661,8 +668,8 @@ function Engine.GetEffectiveAP(state)
 	local ap = state.ap or 1000
 
 	-- Battle Shout buff
-	if state.buffs.BattleShout and state.buffs.BattleShout.endTime > state.time then
-		ap = ap + Engine.BUFF_EFFECTS.BattleShout.ap
+	if (state.buffs.BattleShout and state.buffs.BattleShout.endTime > state.time) or state.hasBattleShout then
+		ap = ap + (ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or Engine.BUFF_EFFECTS.BattleShout.ap)
 	end
 
 	-- Crusader enchant proc (+100 STR = +200 AP)
@@ -845,11 +852,11 @@ function Engine.GenerateRage(state, damage, isOH, isDodge, avgWeaponDmg)
 		rage = rage * Engine.RAGE_OH_PENALTY
 	end
 
-	-- Unbridled Wrath talent: 8/16/24/32/40% chance for +1 rage per hit
+	-- Unbridled Wrath talent: TurtleWoW 15/30/45/60/75% chance for +1 rage per hit
 	-- Uses talent-loaded percentage (0 if no talent points)
 	local uwChance = 0
 	if ATW.Talents and ATW.Talents.UnbridledWrath then
-		uwChance = ATW.Talents.UnbridledWrath  -- 0/8/16/24/32/40%
+		uwChance = ATW.Talents.UnbridledWrath  -- 0/15/30/45/60/75%
 	end
 
 	if uwChance > 0 then
@@ -861,7 +868,7 @@ function Engine.GenerateRage(state, damage, isOH, isDodge, avgWeaponDmg)
 		end
 	end
 
-	state.rage = math.min(state.rage + rage, 100)
+	state.rage = math.min(state.rage + rage, Engine.GetRageCap())
 	return rage
 end
 
@@ -1081,11 +1088,11 @@ function Engine.UseAbility(state, name)
 			execAP = execAP + 200
 		end
 
-		-- TurtleWoW Execute: base + (rage * multiplier)
-		-- Rank 5: 600 + (usedRage * 15)
+		-- TurtleWoW Execute: base + (excess rage * multiplier)
 		local execBase = ATW.GetExecuteBase and ATW.GetExecuteBase() or Engine.EXECUTE_BASE
 		local execCoeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or Engine.EXECUTE_RAGE_MULT
-		damage = execBase + (usedRage * execCoeff)
+		local excessRage = math.max(0, usedRage - baseCost)
+		damage = execBase + (excessRage * execCoeff)
 
 		-- Consume ALL rage (Zebouski: spell.usedrage = ~~this.player.rage)
 		state.rage = 0
@@ -1096,12 +1103,13 @@ function Engine.UseAbility(state, name)
 
 		-- Calculate damage using Zebouski formulas
 		if name == "Bloodthirst" then
-			-- TurtleWoW: 200 + AP * 0.35
-			damage = Engine.BT_BASE + Engine.GetEffectiveAP(state) * Engine.BT_AP_COEFF
+			-- TurtleWoW current: rank base + AP * 0.30
+			local effectiveAP = Engine.GetEffectiveAP(state)
+			damage = ATW.GetBloodthirstDamage and ATW.GetBloodthirstDamage(effectiveAP) or (Engine.BT_BASE + effectiveAP * Engine.BT_AP_COEFF)
 
 			-- Wrath 3-set bonus: +20 rage on Bloodthirst
 			if state.setEffects and state.setEffects.wrath3 then
-				state.rage = math.min(state.rage + 20, 100)
+				state.rage = math.min(state.rage + 20, Engine.GetRageCap())
 			end
 
 		elseif name == "Whirlwind" then
@@ -1119,13 +1127,12 @@ function Engine.UseAbility(state, name)
 			end
 
 		elseif name == "MortalStrike" then
-			-- Weapon + bonus + (ap/14) * normSpeed
-			-- Dynamic normalization: 2.4 for 1H, 3.3 for 2H
-			local msBonus = ATW.GetMortalStrikeBonus and ATW.GetMortalStrikeBonus() or Engine.MS_BONUS
+			-- TurtleWoW: 105/110/115/120% normalized weapon damage
 			local normSpeed = Engine.GetNormalizationSpeed()
-			damage = Engine.RollWeaponDamage(state, false, true, normSpeed) + msBonus
+			local multiplier = ATW.GetMortalStrikeMultiplier and ATW.GetMortalStrikeMultiplier() or Engine.MS_MULT
+			damage = Engine.RollWeaponDamage(state, false, true, normSpeed) * multiplier
 
-		elseif name == "Slam" then
+		elseif name == "Slam" or name == "DecisiveStrike" then
 			-- Weapon + bonus + (ap/14) * weaponSpeed
 			local slamBonus = ATW.GetSlamBonus and ATW.GetSlamBonus() or Engine.SLAM_BONUS
 			damage = Engine.RollWeaponDamage(state, false, false) + slamBonus
@@ -1169,7 +1176,7 @@ function Engine.UseAbility(state, name)
 
 	-- Handle rage generation abilities
 	if ability.rageGen then
-		state.rage = math.min(state.rage + ability.rageGen, 100)
+		state.rage = math.min(state.rage + ability.rageGen, Engine.GetRageCap())
 	end
 
 	-- Apply buff effects for buff abilities
@@ -1584,12 +1591,18 @@ function Engine.ShouldCancelSwing(state)
 		-- Execute = base + (rage * coeff)
 		local execBase = ATW.GetExecuteBase and ATW.GetExecuteBase() or Engine.EXECUTE_BASE
 		local execCoeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or Engine.EXECUTE_RAGE_MULT
-		local execDmg = execBase + (state.rage * execCoeff)
+		local execDmg = execBase + (math.max(0, state.rage - execCost) * execCoeff)
 
 		-- If we wait for HS, we get HS damage but Execute later with less rage
 		-- (rage spent on HS is rage not spent on Execute)
-		local rageCost = state.swingQueued == "hs" and 15 or 20
-		local execWithHS = execBase + ((state.rage - rageCost) * execCoeff)
+		local rageCost
+		if state.swingQueued == "hs" then
+			rageCost = ATW.GetRageCost and ATW.GetRageCost("HeroicStrike") or 15
+		else
+			rageCost = ATW.GetRageCost and ATW.GetRageCost("Cleave") or 20
+		end
+		local rageAfterQueued = math.max(0, state.rage - rageCost)
+		local execWithHS = execBase + (math.max(0, rageAfterQueued - execCost) * execCoeff)
 
 		local gainFromCancel = execDmg - (execWithHS + hsValue)
 
@@ -1669,8 +1682,9 @@ function Engine.Simulate(duration, strategy)
 		if ATW.Talents and ATW.Talents.AngerManagement then
 			while state.time >= lastAngerManagementTick + 3000 do
 				lastAngerManagementTick = lastAngerManagementTick + 3000
-				if state.rage < 100 then
-					state.rage = math.min(state.rage + 1, 100)
+				local rageCap = Engine.GetRageCap()
+				if state.rage < rageCap then
+					state.rage = math.min(state.rage + 1, rageCap)
 				end
 			end
 		end
@@ -2563,6 +2577,7 @@ function Engine.GetValidActions(state)
 			Overpower = "OverpowerRank",
 			Whirlwind = "WhirlwindRank",
 			Slam = "SlamRank",
+			DecisiveStrike = "DecisiveStrikeRank",
 			Hamstring = "HamstringRank",
 			BattleShout = "BattleShoutRank",
 			-- Talent abilities
@@ -2596,6 +2611,7 @@ function Engine.GetValidActions(state)
 				BattleShout = "Battle Shout",
 				HeroicStrike = "Heroic Strike",
 				MortalStrike = "Mortal Strike",
+				DecisiveStrike = "Decisive Strike",
 				BerserkerRage = "Berserker Rage",
 				DeathWish = "Death Wish",
 				SweepingStrikes = "Sweeping Strikes",
@@ -2782,10 +2798,17 @@ function Engine.GetValidActions(state)
 	end
 
 	---------------------------------------
-	-- Slam (any stance, 15 rage, resets swing timer, REQUIRES MELEE)
-	-- ONLY with 2H weapon, only after auto landed
+	-- Slam / Decisive Strike (any stance, 15 rage, REQUIRES MELEE)
+	-- TurtleWoW pauses swing progress; only use with 2H after an auto landed.
 	---------------------------------------
-	if hasSpell("Slam") and not state.hasOH and canMelee() then
+	local slamAction = nil
+	if hasSpell("DecisiveStrike") then
+		slamAction = "DecisiveStrike"
+	elseif hasSpell("Slam") then
+		slamAction = "Slam"
+	end
+
+	if slamAction and not state.hasOH and canMelee() then
 		local slamCost = 15
 		local slamReady = (state.cooldowns.Slam or 0) <= 0
 		if slamReady and rage >= slamCost then
@@ -2793,7 +2816,7 @@ function Engine.GetValidActions(state)
 			local mhSpeed = state.mhSpeed or 2500
 			local swingJustLanded = mhTimer >= (mhSpeed * 0.85)
 			if swingJustLanded then
-				table.insert(actions, {name = "Slam", rage = slamCost})
+				table.insert(actions, {name = slamAction, rage = slamCost})
 			end
 		end
 	end
@@ -2817,7 +2840,7 @@ function Engine.GetValidActions(state)
 	---------------------------------------
 	if hasSpell("Cleave") then
 		local numMeleeTargets = state.enemyCountMelee or 1
-		local cleaveCost = 20
+		local cleaveCost = ATW.GetRageCost and ATW.GetRageCost("Cleave") or 20
 		if numMeleeTargets >= 2 and rage >= cleaveCost and not state.swingQueued then
 			table.insert(actions, {name = "Cleave", rage = cleaveCost, offGCD = true})
 		end
@@ -3038,12 +3061,12 @@ function Engine.GetActionDamage(state, action)
 		damage = base + (excess * coeff)
 
 	elseif action.name == "Bloodthirst" then
-		damage = ATW.GetBloodthirstDamage and ATW.GetBloodthirstDamage(ap) or (200 + ap * 0.35)
+		damage = ATW.GetBloodthirstDamage and ATW.GetBloodthirstDamage(ap) or (150 + ap * 0.30)
 
 	elseif action.name == "MortalStrike" then
-		local bonus = ATW.GetMortalStrikeBonus and ATW.GetMortalStrikeBonus() or 120
 		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
-		damage = weaponDmg + bonus
+		local multiplier = ATW.GetMortalStrikeMultiplier and ATW.GetMortalStrikeMultiplier() or Engine.MS_MULT
+		damage = weaponDmg * multiplier
 
 	elseif action.name == "Whirlwind" then
 		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
@@ -3063,7 +3086,7 @@ function Engine.GetActionDamage(state, action)
 		local opCrit = baseCrit + opCritBonus  -- No berserker bonus since it's Battle stance
 		critExpectedMult = 1 + (opCrit / 100) * (critMultiplier - 1)
 
-	elseif action.name == "Slam" then
+	elseif action.name == "Slam" or action.name == "DecisiveStrike" then
 		-- Slam: weapon damage + bonus; TurtleWoW pauses the swing timer
 		local bonus = ATW.GetSlamBonus and ATW.GetSlamBonus() or 87
 		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
@@ -3085,13 +3108,13 @@ function Engine.GetActionDamage(state, action)
 		-- Battle Shout doesn't deal direct damage, but its AP boost
 		-- is valuable. Calculate the AP benefit over the fight:
 		-- ~232 AP for 2 minutes = significant damage increase
-		-- Estimate: 232 AP * 0.35 (BT coeff) * ~10 BT casts = ~800 damage value
+		-- Estimate: 232 AP * 0.30 (BT coeff) across horizon GCDs
 		-- But this is spread over time, so divide by horizon
 		local bsAP = ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or 232
 		local horizonSec = Engine.GetHorizon() / 1000
 		local gcdsInHorizon = horizonSec / 1.5
 		-- Rough value: AP bonus * ability coefficient * casts
-		damage = bsAP * 0.35 * gcdsInHorizon * 0.5  -- Conservative estimate
+		damage = bsAP * 0.30 * gcdsInHorizon * 0.5  -- Conservative estimate
 		canCrit = false
 
 	elseif action.name == "Rend" then
@@ -3273,6 +3296,7 @@ function Engine.GetActionDamage(state, action)
 			Overpower = true,
 			Execute = true,
 			Slam = true,
+			DecisiveStrike = true,
 			HeroicStrike = true,
 		}
 		if ssAbilities[action.name] and (state.enemyCountMelee or 1) >= 2 then
@@ -3332,7 +3356,7 @@ function Engine.ApplyAction(state, action)
 		newState.inCombat = true
 
 	elseif action.name == "Whirlwind" then
-		-- TurtleWoW 1.17.2: Improved Whirlwind reduces CD by 1/1.5/2s
+		-- TurtleWoW: Ravager/Improved Whirlwind reduces CD by 1/1.5/2s
 		local wwCD = ATW.GetAbilityCooldown and ATW.GetAbilityCooldown("Whirlwind") or 10
 		newState.cooldowns.Whirlwind = wwCD * 1000
 		newState.inCombat = true
@@ -3343,7 +3367,7 @@ function Engine.ApplyAction(state, action)
 		newState.overpowerEnd = 0
 		newState.inCombat = true
 
-	elseif action.name == "Slam" then
+	elseif action.name == "Slam" or action.name == "DecisiveStrike" then
 		-- TurtleWoW Slam pauses the weapon swing timer instead of resetting it.
 		-- This tactical model advances time by the GCD without wiping swing progress.
 		newState.inCombat = true
@@ -3354,7 +3378,7 @@ function Engine.ApplyAction(state, action)
 		newState.cooldowns.Charge = 15000  -- 15s CD
 		-- Add rage gain (already calculated in action)
 		local rageGain = action.rageGain or 9
-		newState.rage = math.min(100, newState.rage + rageGain)
+		newState.rage = math.min(Engine.GetRageCap(), newState.rage + rageGain)
 
 		-- TRAVEL TIME: Calculate time to reach melee range
 		-- Charge speed = 28 yards/second (from TrinityCore research)
@@ -3412,7 +3436,7 @@ function Engine.ApplyAction(state, action)
 		end
 
 		-- Generate instant rage (10 instant, 10 over time handled by rage gen)
-		newState.rage = math.min(100, newState.rage + 10)
+		newState.rage = math.min(Engine.GetRageCap(), newState.rage + 10)
 
 	elseif action.name == "BerserkerRage" then
 		newState.cooldowns.BerserkerRage = 30000  -- 30s CD
@@ -3490,6 +3514,7 @@ function Engine.ApplyAction(state, action)
 			Overpower = true,
 			Execute = true,
 			Slam = true,
+			DecisiveStrike = true,
 			HeroicStrike = true,
 		}
 		if ssAbilities[action.name] and (newState.enemyCountMelee or 1) >= 2 then
@@ -3562,7 +3587,7 @@ function Engine.ApplyAction(state, action)
 			if not newState.hasOH then
 				ragePerGCD = 10  -- Less rage with 2H
 			end
-			newState.rage = math.min(100, newState.rage + ragePerGCD)
+			newState.rage = math.min(Engine.GetRageCap(), newState.rage + ragePerGCD)
 		end
 
 		-- Decay target HP (main target)
@@ -4150,7 +4175,7 @@ function Engine.GetSimulationTimeline(maxSteps, timelineHorizon)
 				if not simState.hasOH then
 					ragePerGCD = 10  -- Less rage with 2H
 				end
-				simState.rage = math.min(100, simState.rage + ragePerGCD)
+				simState.rage = math.min(Engine.GetRageCap(), simState.rage + ragePerGCD)
 			end
 
 			-- Advance cooldowns while waiting

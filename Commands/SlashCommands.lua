@@ -110,6 +110,7 @@ function ATW.HandleCommand(msg)
 			showSpell("Rend", "RendRank")
 			showSpell("Whirlwind", "WhirlwindRank")
 			showSpell("Slam", "SlamRank")
+			showSpell("Decisive Strike", "DecisiveStrikeRank")
 
 			ATW.Print("|cFFFFFF00Talent Abilities:|r")
 			showSpell("Bloodthirst", "BloodthirstRank")

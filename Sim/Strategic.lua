@@ -522,14 +522,16 @@ function Strategic.DetermineAoEStrategy(state)
 		-- Fill with WW and BT
 		local wwCasts = math.floor(remainingGCDs * 0.3)  -- WW every ~3 GCDs
 		local btCasts = remainingGCDs - wwCasts
-		rendSpreadDamage = rendSpreadDamage + (wwCasts * wwDamage) + (btCasts * (200 + ap * 0.35))
+		local btDamage = ATW.GetBloodthirstDamage and ATW.GetBloodthirstDamage(ap) or (150 + ap * 0.30)
+		rendSpreadDamage = rendSpreadDamage + (wwCasts * wwDamage) + (btCasts * btDamage)
 	end
 
 	-- Strategy B: Pure Cleave/WW (ignore Rend)
 	local pureAoEDamage = 0
 	local wwCasts = math.floor(horizonGCDs * 0.3)
 	local btCasts = horizonGCDs - wwCasts
-	pureAoEDamage = (wwCasts * wwDamage) + (btCasts * (200 + ap * 0.35))
+	local btDamage = ATW.GetBloodthirstDamage and ATW.GetBloodthirstDamage(ap) or (150 + ap * 0.30)
+	pureAoEDamage = (wwCasts * wwDamage) + (btCasts * btDamage)
 	-- Add Cleave value (off-GCD)
 	pureAoEDamage = pureAoEDamage + (cleaveDamage * 5)  -- ~5 Cleaves in 15s
 

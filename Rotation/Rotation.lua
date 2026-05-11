@@ -356,8 +356,8 @@ function ATW.Rotation(chainDepth)
 		end
 		ATW.OnSwingAbilityQueued(ability.name)
 
-	elseif abilityName == "Slam" then
-		-- Slam has cast time, use standard cast
+	elseif abilityName == "Slam" or abilityName == "DecisiveStrike" then
+		-- Slam/Decisive Strike have cast time, use standard cast
 		ATW.Cast(ability.name, true)
 
 	else
@@ -538,7 +538,8 @@ function ATW.LegacyRotation()
 	local wwCD = not ATW.Ready("Whirlwind")
 
 	if btCD and msCD and wwCD and rage >= cfg.HSRage then
-		if aoe and rage >= 20 and ATW.Ready("Cleave") then
+		local cleaveCost = ATW.GetRageCost and ATW.GetRageCost("Cleave") or 20
+		if aoe and rage >= cleaveCost and ATW.Ready("Cleave") then
 			ATW.Cast("Cleave", true)
 			return
 		end

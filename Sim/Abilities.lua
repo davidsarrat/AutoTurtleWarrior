@@ -30,11 +30,11 @@ Abilities.Bloodthirst = {
 	gcd = true,
 	isCooldown = false,
 	damage = function(stats)
-		-- TurtleWoW: 200 + AP * 0.35 (from Zebouski)
+		-- TurtleWoW current: rank base + AP * 0.30
 		if ATW.GetBloodthirstDamage then
 			return ATW.GetBloodthirstDamage(stats.AP)
 		end
-		return 200 + (stats.AP * 0.35)
+		return 150 + (stats.AP * 0.30)
 	end,
 	condition = function(state)
 		-- Need Berserker Stance and the talent
@@ -48,7 +48,7 @@ Abilities.Bloodthirst = {
 Abilities.Whirlwind = {
 	name = "Whirlwind",
 	rage = 25,  -- TurtleWoW reduced from 60
-	cd = 10,    -- Base, reduced by Improved Whirlwind
+	cd = 10,    -- Base, reduced by Ravager/Improved Whirlwind
 	stance = {3},  -- Berserker only
 	gcd = true,
 	isCooldown = false,
@@ -103,10 +103,9 @@ Abilities.MortalStrike = {
 	gcd = true,
 	isCooldown = false,
 	damage = function(stats)
-		-- Weapon damage + bonus (dynamic by rank)
 		local weaponDmg = stats.MHDmg or 100
-		local bonus = ATW.GetMortalStrikeBonus and ATW.GetMortalStrikeBonus() or 120
-		return weaponDmg + bonus
+		local multiplier = ATW.GetMortalStrikeMultiplier and ATW.GetMortalStrikeMultiplier() or 1.20
+		return weaponDmg * multiplier
 	end,
 	condition = function(state)
 		return ATW.Talents.HasMS and ATW.HasWeapon and ATW.HasWeapon()
@@ -152,6 +151,23 @@ Abilities.Slam = {
 	end,
 	condition = function(state)
 		-- Only worth using with 2H (check for no offhand)
+		return not ATW.Stats.HasOffHand
+	end,
+}
+
+Abilities.DecisiveStrike = {
+	name = "Decisive Strike",
+	rage = 15,
+	cd = 0,
+	stance = {0},
+	gcd = true,
+	isCooldown = false,
+	damage = function(stats)
+		local weaponDmg = stats.MHDmg or 100
+		local bonus = ATW.GetSlamBonus and ATW.GetSlamBonus() or 87
+		return weaponDmg + bonus
+	end,
+	condition = function(state)
 		return not ATW.Stats.HasOffHand
 	end,
 }
@@ -213,12 +229,11 @@ Abilities.Cleave = {
 
 		return singleDmg * targets
 	end,
-	-- No condition - let DPR comparison decide
-	-- With 1 target: Cleave DPR = HS DPR * (15/20) = 75% of HS
-	-- With 2 targets: Cleave DPR = 2 * HS DPR * (15/20) = 150% of HS
+	-- No condition - let DPR comparison decide. Ravager can reduce the cost.
 	condition = nil,
 	effectiveRage = function(stats)
-		return 20 + 10  -- Cost + lost white rage
+		local cost = ATW.GetRageCost and ATW.GetRageCost("Cleave") or 20
+		return cost + 10  -- Cost + lost white rage
 	end,
 }
 
@@ -588,6 +603,9 @@ function ATW.GetRageCost(abilityName)
 		return ATW.Talents.HSCost or 15
 	elseif abilityName == "Execute" then
 		return ATW.Talents.ExecCost or 15
+	elseif abilityName == "Cleave" then
+		local ravager = ATW.Talents and (ATW.Talents.Ravager or ATW.Talents.ImprovedWhirlwind) or 0
+		return math.max(0, (ability.rage or 20) - ravager)
 	end
 
 	return ability.rage
@@ -596,7 +614,7 @@ end
 ---------------------------------------
 -- Get ability cooldown accounting for talents
 -- TurtleWoW changes:
--- - Improved Whirlwind reduces WW CD
+-- - Ravager/Improved Whirlwind reduces WW CD
 -- - Execute currently has no cooldown
 ---------------------------------------
 function ATW.GetAbilityCooldown(abilityName)
@@ -607,7 +625,7 @@ function ATW.GetAbilityCooldown(abilityName)
 		local baseCd = 10  -- Base Whirlwind CD in seconds
 		local reduction = 0
 		if ATW.Talents and ATW.Talents.ImprovedWhirlwind then
-			-- Improved Whirlwind: -1/-1.5/-2 seconds per point
+			-- Ravager/Improved Whirlwind: -1/-1.5/-2 seconds per point
 			-- Points: 0-3, Reduction: 0/1/1.5/2
 			local points = ATW.Talents.ImprovedWhirlwind
 			if points == 1 then reduction = 1
