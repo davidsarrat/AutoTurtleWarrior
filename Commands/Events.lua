@@ -80,10 +80,6 @@ EventFrame:SetScript("OnEvent", function()
 			ATW.InitRageModel()
 		end
 
-		-- Initialize UI
-		ATW.InitDisplay()
-		ATW.InitTimeline()
-
 		-- Show loaded message with stance info
 		local stanceName = ATW.StanceNames[AutoTurtleWarrior_Config.PrimaryStance] or "None"
 		ATW.Print("Loaded | Primary: " .. stanceName)

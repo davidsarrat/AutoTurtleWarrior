@@ -40,9 +40,6 @@ Sim\Simulator.lua
 # Rotation (uses Simulation)
 Rotation\Rotation.lua
 
-# UI
-UI\Display.lua
-
 # Commands
 Commands\SlashCommands.lua
 Commands\Events.lua

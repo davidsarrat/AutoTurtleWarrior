@@ -91,3 +91,36 @@ ATW.Talents = {
 	HasDW = nil,   -- Death Wish
 	HasIBR = nil,  -- Improved Berserker Rage
 }
+
+---------------------------------------
+-- UI Compatibility No-Ops
+-- The addon intentionally ships without visual frames.
+---------------------------------------
+function ATW.InitDisplay() end
+function ATW.InitTimeline() end
+function ATW.UpdateDisplay() end
+function ATW.UpdateTimeline() end
+
+function ATW.ToggleDisplay()
+	ATW.Print("UI display is disabled in this build.")
+end
+
+function ATW.ToggleLock()
+	ATW.Print("UI display is disabled in this build.")
+end
+
+function ATW.ResetDisplayPosition()
+	ATW.Print("UI display is disabled in this build.")
+end
+
+function ATW.SetDisplayScale()
+	ATW.Print("UI display is disabled in this build.")
+end
+
+function ATW.ToggleTimeline()
+	ATW.Print("UI timeline is disabled in this build.")
+end
+
+function ATW.ResetTimelinePosition()
+	ATW.Print("UI timeline is disabled in this build.")
+end
