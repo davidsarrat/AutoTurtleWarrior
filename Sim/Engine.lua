@@ -433,6 +433,11 @@ function Engine.InitPlayer(state)
 	state.mhSpeed = (stats.MainHandSpeed or 2.6) * 1000
 	state.ohSpeed = (stats.OffHandSpeed or 2.6) * 1000
 	state.hasOH = stats.HasOffHand or false
+	state.apIncludesBattleShout = ATW.Buff and ATW.Buff("player", "Ability_Warrior_BattleShout") or false
+	state.activeBattleShoutAP = 0
+	if state.apIncludesBattleShout and ATW.GetActiveBattleShoutAP then
+		state.activeBattleShoutAP = ATW.GetActiveBattleShoutAP() or 0
+	end
 
 	-- Add gear stat bonuses (trinkets, enchant procs)
 	if ATW.GetGearStatBonuses then
@@ -484,6 +489,7 @@ function Engine.InitPlayer(state)
 	state.mhDmgMax = estimatedDPS * (state.mhSpeed / 1000) * 1.15
 	state.ohDmgMin = state.mhDmgMin * 0.5
 	state.ohDmgMax = state.mhDmgMax * 0.5
+	state.weaponDamageAP = state.ap
 
 	-- Current rage
 	state.rage = UnitMana("player") or 0
@@ -667,9 +673,27 @@ end
 function Engine.GetEffectiveAP(state)
 	local ap = state.ap or 1000
 
-	-- Battle Shout buff
-	if (state.buffs.BattleShout and state.buffs.BattleShout.endTime > state.time) or state.hasBattleShout then
-		ap = ap + (ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or Engine.BUFF_EFFECTS.BattleShout.ap)
+	-- Battle Shout buff. UnitAttackPower already includes live buffs, so only
+	-- add full AP when the simulator applies it from absent, or the upgrade
+	-- delta when it overwrites a weaker active shout.
+	local hasBattleShout = (state.buffs.BattleShout and state.buffs.BattleShout.endTime > state.time) or state.hasBattleShout
+	if hasBattleShout then
+		local simulatedAP = state.simulatedBattleShoutAP
+		if simulatedAP then
+			if state.apIncludesBattleShout then
+				local activeAP = state.activeBattleShoutAP or 0
+				if activeAP > 0 and simulatedAP > activeAP then
+					ap = ap + (simulatedAP - activeAP)
+				end
+			else
+				ap = ap + simulatedAP
+			end
+		elseif not state.apIncludesBattleShout then
+			local activeAP = state.activeBattleShoutAP or 0
+			local fallbackAP = ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or Engine.BUFF_EFFECTS.BattleShout.ap
+			local shoutAP = activeAP > 0 and activeAP or fallbackAP
+			ap = ap + shoutAP
+		end
 	end
 
 	-- Crusader enchant proc (+100 STR = +200 AP)
@@ -719,7 +743,10 @@ function Engine.GetHasteMod(state)
 end
 
 ---------------------------------------
--- Roll for damage (weapon + AP)
+-- Roll for damage from the estimated weapon tooltip.
+-- state.mhDmg/ohDmg are initialized from AP-inclusive weapon damage. For
+-- future AP buffs in a branch, apply only the AP delta; for normalized
+-- attacks, replace real-speed AP with normalized AP instead of adding twice.
 ---------------------------------------
 function Engine.RollWeaponDamage(state, isOH, normalized, normSpeed)
 	local minDmg, maxDmg
@@ -728,21 +755,47 @@ function Engine.RollWeaponDamage(state, isOH, normalized, normSpeed)
 	else
 		minDmg, maxDmg = state.mhDmgMin, state.mhDmgMax
 	end
+	minDmg = minDmg or (isOH and 50 or 100)
+	maxDmg = maxDmg or (isOH and 100 or 200)
 
 	-- Random roll between min and max
-	local baseDmg = minDmg + math.random() * (maxDmg - minDmg)
+	local tooltipDmg = minDmg + math.random() * (maxDmg - minDmg)
 
-	-- Add AP bonus (using effective AP with buffs)
 	local effectiveAP = Engine.GetEffectiveAP(state)
-	local apBonus
+	local tooltipAP = state.weaponDamageAP or state.ap or effectiveAP
+	local speed = (isOH and (state.ohSpeed or 2600) or (state.mhSpeed or 2600)) / 1000
+
 	if normalized and normSpeed then
-		apBonus = effectiveAP * (normSpeed / 14)
-	else
-		local speed = isOH and (state.ohSpeed / 1000) or (state.mhSpeed / 1000)
-		apBonus = effectiveAP * (speed / 14)
+		local baseWeaponDmg = tooltipDmg - (tooltipAP * speed / 14)
+		if baseWeaponDmg < 0 then baseWeaponDmg = 0 end
+		return baseWeaponDmg + (effectiveAP * normSpeed / 14)
 	end
 
-	return baseDmg + apBonus
+	return tooltipDmg + ((effectiveAP - tooltipAP) * speed / 14)
+end
+
+function Engine.GetAverageWeaponDamage(state, isOH, normalized, normSpeed)
+	local minDmg, maxDmg
+	if isOH then
+		minDmg, maxDmg = state.ohDmgMin, state.ohDmgMax
+	else
+		minDmg, maxDmg = state.mhDmgMin, state.mhDmgMax
+	end
+	minDmg = minDmg or (isOH and 50 or 100)
+	maxDmg = maxDmg or (isOH and 100 or 200)
+
+	local tooltipDmg = (minDmg + maxDmg) / 2
+	local effectiveAP = Engine.GetEffectiveAP(state)
+	local tooltipAP = state.weaponDamageAP or state.ap or effectiveAP
+	local speed = (isOH and (state.ohSpeed or 2600) or (state.mhSpeed or 2600)) / 1000
+
+	if normalized and normSpeed then
+		local baseWeaponDmg = tooltipDmg - (tooltipAP * speed / 14)
+		if baseWeaponDmg < 0 then baseWeaponDmg = 0 end
+		return baseWeaponDmg + (effectiveAP * normSpeed / 14)
+	end
+
+	return tooltipDmg + ((effectiveAP - tooltipAP) * speed / 14)
 end
 
 ---------------------------------------
@@ -836,7 +889,7 @@ function Engine.GenerateRage(state, damage, isOH, isDodge, avgWeaponDmg)
 
 	if isDodge then
 		-- Dodge generates 75% rage based on average weapon damage
-		local avgDmg = avgWeaponDmg or ((state.mhDmgMin + state.mhDmgMax) / 2)
+		local avgDmg = avgWeaponDmg or Engine.GetAverageWeaponDamage(state, false, false)
 		rage = (avgDmg / Engine.RAGE_CONVERSION) * Engine.RAGE_HIT_FACTOR * Engine.RAGE_DODGE_FACTOR
 	else
 		-- Normal hit
@@ -1185,6 +1238,7 @@ function Engine.UseAbility(state, name)
 			endTime = state.time + Engine.BUFF_DURATIONS.BattleShout,
 			stacks = 1,
 		}
+		state.simulatedBattleShoutAP = ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or Engine.BUFF_EFFECTS.BattleShout.ap
 	elseif name == "DeathWish" then
 		state.buffs.DeathWish = {
 			endTime = state.time + Engine.BUFF_DURATIONS.DeathWish,
@@ -1560,18 +1614,20 @@ function Engine.ShouldCancelSwing(state)
 
 	-- Calculate HS/Cleave expected value
 	local hsBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS
-	local hsDamage = hsBonus + ((state.mhDmgMin + state.mhDmgMax) / 2)
+	local mhAvg = Engine.GetAverageWeaponDamage(state, false, false)
+	local hsDamage = hsBonus + mhAvg
 	local hsValue = hsDamage * Engine.GetDamageMod(state)
 
 	-- Factor in crit chance
 	local critChance = Engine.GetCritChance(state, "HeroicStrike") / 100
-	local critMod = 1 + (ATW.Talents and ATW.Talents.Impale and ATW.Talents.Impale * 0.10 or 0)
-	hsValue = hsValue * (1 + critChance * critMod)
+	local impale = ATW.Talents and ATW.Talents.Impale or 0
+	local abilityCritMod = 2.0 + (impale * 0.10)
+	hsValue = hsValue * (1 + critChance * (abilityCritMod - 1))
 
 	-- Penalty: we ALSO lose the auto-attack and reset swing timer
 	-- This means we delay rage generation significantly
 	local swingSpeed = state.mhSpeed / Engine.GetHasteMod(state)
-	local autoValue = ((state.mhDmgMin + state.mhDmgMax) / 2) * Engine.GetDamageMod(state)
+	local autoValue = mhAvg * Engine.GetDamageMod(state)
 
 	-- Total value of NOT canceling = HS + auto (later) + rage gen
 	-- Time to swing if we don't cancel: state.mhTimer
@@ -1635,7 +1691,7 @@ function Engine.ShouldCancelSwing(state)
 		-- But the white hit WILL generate rage
 
 		-- Estimate rage from white hit
-		local whiteDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		local whiteDmg = Engine.GetAverageWeaponDamage(state, false, false)
 		local rageFromHit = (whiteDmg / Engine.RAGE_CONVERSION) * Engine.RAGE_HIT_FACTOR
 
 		-- If white + current rage >= BT cost, cancel might help
@@ -3025,25 +3081,14 @@ function Engine.GetActionDamage(state, action)
 		return 0
 	end
 
-	local ap = state.ap or 1000
+	local ap = Engine.GetEffectiveAP(state)
 
-	-- If Battle Shout is active, add its AP
-	if state.hasBattleShout then
-		ap = ap + (ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or 232)
-	end
-
-	-- Crit chance already includes stance bonus via GetCritChance()
-	local baseCrit = state.crit or 20
-	-- Add Berserker bonus (GetCritChance does this too, but for consistency in damage calc)
-	if state.stance == 3 then
-		baseCrit = baseCrit + 3
-	end
-	local effectiveCrit = baseCrit
+	local effectiveCrit = Engine.GetCritChance(state, action.name)
 
 	-- Crit multiplier from Impale talent (10/20% bonus crit damage)
 	-- Base crit = 2x damage, with Impale = 2.1x or 2.2x
-	local impale = ATW.Talents and ATW.Talents.Impale or 0  -- 0/10/20
-	local critMultiplier = 2.0 + (impale / 100)
+	local impale = ATW.Talents and ATW.Talents.Impale or 0  -- 0/1/2 points
+	local critMultiplier = 2.0 + (impale * 0.10)
 
 	-- Expected damage multiplier from crit
 	-- E[dmg] = baseDmg * (1 + critChance * (critMult - 1))
@@ -3064,12 +3109,14 @@ function Engine.GetActionDamage(state, action)
 		damage = ATW.GetBloodthirstDamage and ATW.GetBloodthirstDamage(ap) or (150 + ap * 0.30)
 
 	elseif action.name == "MortalStrike" then
-		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		local normSpeed = Engine.GetNormalizationSpeed()
+		local weaponDmg = Engine.GetAverageWeaponDamage(state, false, true, normSpeed)
 		local multiplier = ATW.GetMortalStrikeMultiplier and ATW.GetMortalStrikeMultiplier() or Engine.MS_MULT
 		damage = weaponDmg * multiplier
 
 	elseif action.name == "Whirlwind" then
-		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		local normSpeed = Engine.GetNormalizationSpeed()
+		local weaponDmg = Engine.GetAverageWeaponDamage(state, false, true, normSpeed)
 		-- Use state.enemyCountWW (8yd range) from CaptureCurrentState
 		local targetsHit = math.min(4, state.enemyCountWW or 1)
 		if targetsHit < 1 then targetsHit = 1 end
@@ -3077,19 +3124,15 @@ function Engine.GetActionDamage(state, action)
 
 	elseif action.name == "Overpower" then
 		local bonus = ATW.GetOverpowerBonus and ATW.GetOverpowerBonus() or 35
-		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		local normSpeed = Engine.GetNormalizationSpeed()
+		local weaponDmg = Engine.GetAverageWeaponDamage(state, false, true, normSpeed)
 		damage = weaponDmg + bonus
-		-- Overpower has +25/50% crit from Improved Overpower talent
-		-- This is ON TOP of the stance crit bonus
-		local opCritBonus = ATW.Talents and ATW.Talents.ImpOP or 0
-		-- Overpower uses Battle Stance (no stance crit bonus)
-		local opCrit = baseCrit + opCritBonus  -- No berserker bonus since it's Battle stance
-		critExpectedMult = 1 + (opCrit / 100) * (critMultiplier - 1)
+		-- Improved Overpower crit is included by GetCritChance().
 
 	elseif action.name == "Slam" or action.name == "DecisiveStrike" then
 		-- Slam: weapon damage + bonus; TurtleWoW pauses the swing timer
 		local bonus = ATW.GetSlamBonus and ATW.GetSlamBonus() or 87
-		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+		local weaponDmg = Engine.GetAverageWeaponDamage(state, false, false)
 		damage = weaponDmg + bonus
 
 	elseif action.name == "Charge" then
@@ -3114,7 +3157,9 @@ function Engine.GetActionDamage(state, action)
 		local horizonSec = Engine.GetHorizon() / 1000
 		local gcdsInHorizon = horizonSec / 1.5
 		-- Rough value: AP bonus * ability coefficient * casts
-		damage = bsAP * 0.30 * gcdsInHorizon * 0.5  -- Conservative estimate
+		local activeAP = state.apIncludesBattleShout and (state.activeBattleShoutAP or 0) or 0
+		local bsGain = state.hasBattleShout and math.max(0, bsAP - activeAP) or bsAP
+		damage = bsGain * 0.30 * gcdsInHorizon * 0.5  -- Conservative estimate
 		canCrit = false
 
 	elseif action.name == "Rend" then
@@ -3213,7 +3258,7 @@ function Engine.GetActionDamage(state, action)
 		-- Value depends on number of targets
 		local numTargets = state.enemyCountMelee or 1
 		if numTargets >= 2 then
-			local avgWeaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
+			local avgWeaponDmg = Engine.GetAverageWeaponDamage(state, false, false)
 			-- 5 extra hits on secondary target
 			damage = avgWeaponDmg * 5 * 0.5  -- Discounted
 		else
@@ -3390,7 +3435,8 @@ function Engine.ApplyAction(state, action)
 
 	elseif action.name == "BattleShout" then
 		newState.hasBattleShout = true
-		-- AP will be added in GetActionDamage for subsequent abilities
+		newState.simulatedBattleShoutAP = ATW.GetBattleShoutAP and ATW.GetBattleShoutAP() or Engine.BUFF_EFFECTS.BattleShout.ap
+		-- AP will be added in GetEffectiveAP for subsequent abilities
 
 	elseif action.name == "Rend" then
 		-- MULTI-TARGET REND: Update specific enemy's state if targetGUID provided
@@ -3730,16 +3776,12 @@ function Engine.EstimateAutoAttackDamage(state, horizon)
 	end
 
 	-- Safety checks for nil values
-	local mhDmgMin = state.mhDmgMin or 100
-	local mhDmgMax = state.mhDmgMax or 200
-	local ohDmgMin = state.ohDmgMin or 50
-	local ohDmgMax = state.ohDmgMax or 100
 	local mhSpeedMs = state.mhSpeed or 2600
 	local ohSpeedMs = state.ohSpeed or 2600
 
 	-- Average weapon damage
-	local mhAvg = (mhDmgMin + mhDmgMax) / 2
-	local ohAvg = state.hasOH and ((ohDmgMin + ohDmgMax) / 2) or 0
+	local mhAvg = Engine.GetAverageWeaponDamage(state, false, false)
+	local ohAvg = state.hasOH and Engine.GetAverageWeaponDamage(state, true, false) or 0
 
 	-- Haste modifier
 	local hasteMod = Engine.GetHasteMod(state) or 1
@@ -3774,8 +3816,9 @@ function Engine.EstimateAutoAttackDamage(state, horizon)
 	-- Crit calculation
 	local critChance = (Engine.GetCritChance(state, nil) or 20) / 100
 	local impale = ATW.Talents and ATW.Talents.Impale or 0
-	local critMod = 2.0 + (impale / 100)
-	local critMultiplier = 1 + (critChance * (critMod - 1))
+	local autoCritMod = 2.0
+	local abilityCritMod = 2.0 + (impale * 0.10)
+	local critMultiplier = 1 + (critChance * (autoCritMod - 1))
 
 	---------------------------------------
 	-- MAIN HAND SWINGS using real timer
@@ -3792,7 +3835,7 @@ function Engine.EstimateAutoAttackDamage(state, horizon)
 			if state.swingQueued == "hs" then
 				local swingBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS or 157
 				local hsCritChance = (Engine.GetCritChance(state, "HeroicStrike") or 20) / 100
-				local hsCritMult = 1 + (hsCritChance * (critMod - 1))
+				local hsCritMult = 1 + (hsCritChance * (abilityCritMod - 1))
 				swingDamage = (mhAvg + swingBonus) * damageMod * hsCritMult
 			elseif state.swingQueued == "cleave" then
 				local swingBonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or Engine.CLEAVE_BONUS or 50
@@ -3800,7 +3843,7 @@ function Engine.EstimateAutoAttackDamage(state, horizon)
 				local targets = math.min(enemyCount, 2)
 				if targets < 1 then targets = 1 end
 				local hsCritChance = (Engine.GetCritChance(state, "Cleave") or 20) / 100
-				local hsCritMult = 1 + (hsCritChance * (critMod - 1))
+				local hsCritMult = 1 + (hsCritChance * (abilityCritMod - 1))
 				swingDamage = (mhAvg + swingBonus) * targets * damageMod * hsCritMult
 			end
 		end
