@@ -97,6 +97,9 @@ end
 function ATW.OnSwingAbilityQueued(abilityName)
 	ATW.Swing.queued = abilityName
 	ATW.Swing.queuedTime = GetTime()
+	if ATW.InvalidateDecisionCaches then
+		ATW.InvalidateDecisionCaches()
+	end
 end
 
 ---------------------------------------
@@ -301,6 +304,9 @@ function ATW.OnUnitCastEvent(casterGUID, targetGUID, eventType, spellID, duratio
 		swing.MHSpeed = ATW.Stats.MainHandSpeed or 2.6
 		swing.OHSpeed = ATW.Stats.OffHandSpeed or 2.6
 		swing.lastCombatAction = now
+		if ATW.InvalidateDecisionCaches then
+			ATW.InvalidateDecisionCaches()
+		end
 
 		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
 			ATW.Debug("MH swing" .. (wasSpecial and " (HS/Cleave)" or ""))
@@ -314,6 +320,9 @@ function ATW.OnUnitCastEvent(casterGUID, targetGUID, eventType, spellID, duratio
 		-- Update weapon speeds from stats
 		swing.OHSpeed = ATW.Stats.OffHandSpeed or 2.6
 		swing.lastCombatAction = now
+		if ATW.InvalidateDecisionCaches then
+			ATW.InvalidateDecisionCaches()
+		end
 
 		if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
 			ATW.Debug("OH swing")
@@ -381,6 +390,9 @@ function ATW.CancelSwingAbility()
 	-- IMPORTANT: Swing timer resets when HS/Cleave is canceled
 	-- This is a known behavior - the MH swing restarts from 0
 	swing.lastMH = GetTime()
+	if ATW.InvalidateDecisionCaches then
+		ATW.InvalidateDecisionCaches()
+	end
 
 	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
 		ATW.Print("Canceled " .. canceledAbility .. " (swing reset)")

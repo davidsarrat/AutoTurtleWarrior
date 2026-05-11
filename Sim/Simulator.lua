@@ -829,9 +829,15 @@ function ATW.InvalidateCooldownCache()
 		ATW.Strategic.lastPlanTime = 0
 	end
 	-- Clear Engine cache
-	if ATW.Engine and ATW.Engine.Cache then
+	if ATW.Engine and ATW.Engine.InvalidateCache then
+		ATW.Engine.InvalidateCache()
+	elseif ATW.Engine and ATW.Engine.Cache then
 		ATW.Engine.Cache.lastState = nil
 		ATW.Engine.Cache.lastResult = nil
+	end
+
+	if ATW.InvalidateAoECache then
+		ATW.InvalidateAoECache()
 	end
 end
 

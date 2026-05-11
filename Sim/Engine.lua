@@ -1901,6 +1901,24 @@ function Engine.InvalidateCache()
 	-- Force recomputation on next GetNextAbility() call
 end
 
+function Engine.BuildRendStateKey(enemies)
+	if not enemies then return "" end
+
+	local key = ""
+	local count = 0
+	for _, enemy in ipairs(enemies) do
+		if enemy.distance and enemy.distance <= 5 then
+			count = count + 1
+			local guid = enemy.guid or ("target" .. count)
+			local rendBucket = math.floor((enemy.rendRemaining or 0) / Engine.GCD)
+			local ttdBucket = math.floor((enemy.ttd or 0) / 3000)
+			key = key .. guid .. ":" .. (enemy.hasRend and "1" or "0") .. ":" .. rendBucket .. ":" .. ttdBucket .. ";"
+			if count >= 6 then break end
+		end
+	end
+	return key
+end
+
 -- Check if state changed enough to require recalculation
 function Engine.CacheValid(newState)
 	local cache = Engine.Cache
@@ -1936,10 +1954,37 @@ function Engine.CacheValid(newState)
 		return false
 	end
 
+	-- Target or mode toggles changed
+	if (newState.targetGUID or "") ~= (oldState.targetGUID or "") then
+		return false
+	end
+	if (newState.aoeEnabled or false) ~= (oldState.aoeEnabled or false) then
+		return false
+	end
+	if (newState.rendSpreadEnabled or false) ~= (oldState.rendSpreadEnabled or false) then
+		return false
+	end
+
 	-- Entered or left execute phase
 	local oldExecute = (oldState.targetHPPercent or 100) < 20
 	local newExecute = (newState.targetHPPercent or 100) < 20
 	if oldExecute ~= newExecute then
+		return false
+	end
+
+	if math.abs((newState.targetHPPercent or 100) - (oldState.targetHPPercent or 100)) >= 5 then
+		return false
+	end
+
+	if math.abs((newState.targetTTD or 30000) - (oldState.targetTTD or 30000)) >= 3000 then
+		return false
+	end
+
+	-- Rend spreading decisions depend on exact per-GUID DoT state.
+	if (newState.rendOnTarget or false) ~= (oldState.rendOnTarget or false) then
+		return false
+	end
+	if math.abs((newState.rendRemaining or 0) - (oldState.rendRemaining or 0)) >= Engine.GCD then
 		return false
 	end
 
@@ -1978,6 +2023,15 @@ function Engine.CacheValid(newState)
 
 	-- Enemy count changed
 	if (oldState.enemyCount or 1) ~= (newState.enemyCount or 1) then
+		return false
+	end
+	if (oldState.enemyCountMelee or 1) ~= (newState.enemyCountMelee or 1) then
+		return false
+	end
+	if (oldState.enemyCountWW or 1) ~= (newState.enemyCountWW or 1) then
+		return false
+	end
+	if (oldState.rendStateKey or "") ~= (newState.rendStateKey or "") then
 		return false
 	end
 
@@ -2379,6 +2433,7 @@ function Engine.CaptureCurrentState()
 			return (a.ttd or 0) > (b.ttd or 0)
 		end)
 	end
+	state.rendStateKey = Engine.BuildRendStateKey(state.enemies)
 
 	-- SINGLE TARGET MODE: Force enemy counts to 1 for AoE ability decisions
 	-- This makes WW/Cleave behave as single-target (lower priority)
@@ -3709,23 +3764,20 @@ function Engine.EstimateAutoAttackDamage(state, horizon)
 
 		-- FIRST MH swing gets HS/Cleave bonus if queued
 		if firstMHSwing and state.swingQueued then
-			local swingBonus = 0
-
 			if state.swingQueued == "hs" then
-				swingBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS or 157
+				local swingBonus = ATW.GetHeroicStrikeBonus and ATW.GetHeroicStrikeBonus() or Engine.HS_BONUS or 157
+				local hsCritChance = (Engine.GetCritChance(state, "HeroicStrike") or 20) / 100
+				local hsCritMult = 1 + (hsCritChance * (critMod - 1))
+				swingDamage = (mhAvg + swingBonus) * damageMod * hsCritMult
 			elseif state.swingQueued == "cleave" then
-				swingBonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or Engine.CLEAVE_BONUS or 50
-				-- Cleave hits 2 targets
+				local swingBonus = ATW.GetCleaveBonus and ATW.GetCleaveBonus() or Engine.CLEAVE_BONUS or 50
 				local enemyCount = state.enemyCountMelee or state.enemyCount or 1
-				if enemyCount >= 2 then
-					swingBonus = swingBonus * 2
-				end
+				local targets = math.min(enemyCount, 2)
+				if targets < 1 then targets = 1 end
+				local hsCritChance = (Engine.GetCritChance(state, "Cleave") or 20) / 100
+				local hsCritMult = 1 + (hsCritChance * (critMod - 1))
+				swingDamage = (mhAvg + swingBonus) * targets * damageMod * hsCritMult
 			end
-
-			-- HS/Cleave can crit
-			local hsCritChance = (Engine.GetCritChance(state, "HeroicStrike") or 20) / 100
-			local hsCritMult = 1 + (hsCritChance * (critMod - 1))
-			swingDamage = swingDamage + (swingBonus * damageMod * hsCritMult)
 		end
 
 		firstMHSwing = false

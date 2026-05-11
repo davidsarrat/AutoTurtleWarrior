@@ -10,6 +10,14 @@ local EventFrame = CreateFrame("Frame")
 local TTD_UPDATE_INTERVAL = 0.25  -- Update TTD every 0.25s
 local lastTTDUpdate = 0
 
+local function InvalidateDecisionCaches()
+	if ATW.InvalidateDecisionCaches then
+		ATW.InvalidateDecisionCaches()
+	elseif ATW.Engine and ATW.Engine.InvalidateCache then
+		ATW.Engine.InvalidateCache()
+	end
+end
+
 EventFrame:RegisterEvent("VARIABLES_LOADED")
 EventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 EventFrame:RegisterEvent("PLAYER_ENTER_COMBAT")
@@ -99,16 +107,28 @@ EventFrame:SetScript("OnEvent", function()
 		if ATW.LearnTargetCreatureType then
 			ATW.LearnTargetCreatureType()
 		end
+		InvalidateDecisionCaches()
 
 	elseif event == "PLAYER_ENTER_COMBAT" then
 		state.Attacking = true
+		InvalidateDecisionCaches()
 
 	elseif event == "PLAYER_LEAVE_COMBAT" then
 		state.Attacking = nil
+		if ATW.RendTracker and ATW.RendTracker.Reset then
+			ATW.RendTracker.Reset()
+		else
+			InvalidateDecisionCaches()
+		end
 
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		state.Dancing = nil
 		state.OldStance = nil
+		if ATW.RendTracker and ATW.RendTracker.Reset then
+			ATW.RendTracker.Reset()
+		else
+			InvalidateDecisionCaches()
+		end
 
 	elseif event == "PLAYER_LEVEL_UP" or event == "SPELLS_CHANGED" or event == "CHARACTER_POINTS_CHANGED" then
 		-- Re-detect stances, talents, and spells when:
@@ -120,6 +140,7 @@ EventFrame:SetScript("OnEvent", function()
 		ATW.LoadRacials()  -- Re-detect racials (Blood Fury AP scales with level)
 		ATW.LoadAvailableAbilities()  -- Re-cache all available abilities
 		ATW.DetectStances()
+		InvalidateDecisionCaches()
 
 	elseif event == "CHAT_MSG_COMBAT_SELF_HITS" then
 		-- Track swing timer
@@ -135,6 +156,7 @@ EventFrame:SetScript("OnEvent", function()
 				local _, _, name = strfind(arg1, "^(.+) dodges")
 				ATW.SetOverpowerProc(name)
 			end
+			InvalidateDecisionCaches()
 		end
 		-- Track swing timer
 		ATW.ParseCombatLogForSwing(arg1, event)
@@ -149,6 +171,7 @@ EventFrame:SetScript("OnEvent", function()
 					local _, _, name = strfind(arg1, "was dodged by (.+)%.$")
 					ATW.SetOverpowerProc(name)
 				end
+				InvalidateDecisionCaches()
 			elseif strfind(arg1, "Your Overpower") and (strfind(arg1, "hits") or strfind(arg1, "crits")) then
 				-- Overpower HIT/CRIT - success callback
 				-- NOTE: Guardrail now handles clearing via cooldown detection
@@ -206,27 +229,34 @@ EventFrame:SetScript("OnEvent", function()
 	elseif event == "UNIT_AURA" or event == "UNIT_ATTACK_POWER" then
 		if arg1 == "player" then
 			ATW.UpdateStats()
-			-- Invalidate cache when buffs change (Death Wish, Enrage, etc.)
-			if ATW.Engine and ATW.Engine.InvalidateCache then
-				ATW.Engine.InvalidateCache()
-			end
+			InvalidateDecisionCaches()
 		end
 
 	elseif event == "PLAYER_EQUIPMENT_CHANGED" then
 		ATW.UpdateStats()
+		InvalidateDecisionCaches()
 
 	-- TTD updates (target only via event)
 	elseif event == "UNIT_HEALTH" then
 		if arg1 == "target" then
 			ATW.UpdateTargetTTD()
+			local hp = UnitHealth("target") or 0
+			local maxHp = UnitHealthMax("target") or 1
+			local hpPercent = maxHp > 0 and (hp / maxHp) * 100 or 100
+			local executeRange = hpPercent < 20
+			if state.LastTargetHPPercent == nil or
+			   math.abs(hpPercent - state.LastTargetHPPercent) >= 5 or
+			   executeRange ~= state.LastTargetExecuteRange then
+				InvalidateDecisionCaches()
+				state.LastTargetHPPercent = hpPercent
+				state.LastTargetExecuteRange = executeRange
+			end
 		end
 
 	-- Cache invalidation: Cooldown completed
 	elseif event == "SPELL_UPDATE_COOLDOWN" then
 		-- Major cooldown completed, invalidate cache for instant update
-		if ATW.Engine and ATW.Engine.InvalidateCache then
-			ATW.Engine.InvalidateCache()
-		end
+		InvalidateDecisionCaches()
 
 	-- Cache invalidation: Rage changed
 	elseif event == "UNIT_POWER" then
@@ -235,9 +265,7 @@ EventFrame:SetScript("OnEvent", function()
 			local oldRage = state.LastRage or 0
 			local newRage = UnitMana("player")
 			if math.abs(newRage - oldRage) >= 10 then
-				if ATW.Engine and ATW.Engine.InvalidateCache then
-					ATW.Engine.InvalidateCache()
-				end
+				InvalidateDecisionCaches()
 				state.LastRage = newRage
 			end
 		end

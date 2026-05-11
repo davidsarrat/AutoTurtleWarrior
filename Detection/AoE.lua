@@ -20,6 +20,45 @@
 ATW.REND_RANGE = 5
 
 ---------------------------------------
+-- Nameplate Scan Cache
+-- WorldFrame child scans allocate heavily; cache for one decision frame.
+---------------------------------------
+ATW.AoECache = {
+	enemies = nil,
+	scanRange = 0,
+	time = 0,
+	ttl = 0.10,
+}
+
+function ATW.InvalidateAoECache()
+	if not ATW.AoECache then return end
+	ATW.AoECache.enemies = nil
+	ATW.AoECache.scanRange = 0
+	ATW.AoECache.time = 0
+end
+
+local function InvalidateRendDecisionState()
+	if ATW.InvalidateDecisionCaches then
+		ATW.InvalidateDecisionCaches()
+	else
+		ATW.InvalidateAoECache()
+		if ATW.Engine and ATW.Engine.InvalidateCache then
+			ATW.Engine.InvalidateCache()
+		end
+	end
+end
+
+local function FilterEnemiesInRange(source, range)
+	local filtered = {}
+	for _, enemy in ipairs(source) do
+		if enemy.distance and enemy.distance <= range then
+			table.insert(filtered, enemy)
+		end
+	end
+	return filtered
+end
+
+---------------------------------------
 -- Per-GUID Rend Tracking
 -- Tracks which targets have Rend CONFIRMED via combat log
 -- Format: {[guid] = {appliedAt, expiresAt, name}}
@@ -43,6 +82,7 @@ function ATW.RendTracker.OnRendCastAttempt(guid, targetName)
 		time = now,
 		name = targetName,
 	}
+	InvalidateRendDecisionState()
 
 	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
 		ATW.Debug("RendTracker: PENDING cast on " .. (targetName or "?") .. " [" .. string.sub(guid, 1, 8) .. "]")
@@ -69,6 +109,7 @@ function ATW.RendTracker.ConfirmRend(guid, targetName)
 
 	-- Remove from pending
 	ATW.RendTracker.pending[guid] = nil
+	InvalidateRendDecisionState()
 
 	if AutoTurtleWarrior_Config and AutoTurtleWarrior_Config.Debug then
 		ATW.Debug("RendTracker: CONFIRMED on " .. (targetName or "?") .. " [" .. string.sub(guid, 1, 8) .. "] (" .. duration .. "s)")
@@ -90,6 +131,7 @@ function ATW.RendTracker.CancelPending(guid)
 			ATW.Debug("RendTracker: CANCELLED pending on " .. (pending.name or "?") .. " [" .. string.sub(guid, 1, 8) .. "]")
 		end
 		ATW.RendTracker.pending[guid] = nil
+		InvalidateRendDecisionState()
 	end
 end
 
@@ -129,6 +171,7 @@ function ATW.RendTracker.HasRendConfirmed(guid)
 		else
 			-- Expired, clean up
 			ATW.RendTracker.targets[guid] = nil
+			InvalidateRendDecisionState()
 		end
 	end
 
@@ -160,6 +203,7 @@ function ATW.RendTracker.HasRend(guid)
 		else
 			-- Timed out - cast probably failed
 			ATW.RendTracker.pending[guid] = nil
+			InvalidateRendDecisionState()
 		end
 	end
 
@@ -183,6 +227,7 @@ function ATW.RendTracker.GetRendRemaining(guid)
 			return remaining
 		else
 			ATW.RendTracker.targets[guid] = nil
+			InvalidateRendDecisionState()
 		end
 	end
 
@@ -196,6 +241,7 @@ function ATW.RendTracker.GetRendRemaining(guid)
 			return math.max(0, duration - age)
 		else
 			ATW.RendTracker.pending[guid] = nil
+			InvalidateRendDecisionState()
 		end
 	end
 
@@ -207,11 +253,13 @@ end
 ---------------------------------------
 function ATW.RendTracker.Cleanup()
 	local now = GetTime()
+	local changed = false
 
 	-- Cleanup confirmed targets
 	for guid, data in pairs(ATW.RendTracker.targets) do
 		if now >= data.expiresAt then
 			ATW.RendTracker.targets[guid] = nil
+			changed = true
 		end
 	end
 
@@ -219,8 +267,15 @@ function ATW.RendTracker.Cleanup()
 	for guid, pending in pairs(ATW.RendTracker.pending) do
 		if now - pending.time >= 5 then
 			ATW.RendTracker.pending[guid] = nil
+			changed = true
 		end
 	end
+
+	if changed then
+		InvalidateRendDecisionState()
+	end
+
+	return changed
 end
 
 ---------------------------------------
@@ -229,6 +284,7 @@ end
 function ATW.RendTracker.Reset()
 	ATW.RendTracker.targets = {}
 	ATW.RendTracker.pending = {}
+	InvalidateRendDecisionState()
 end
 
 ---------------------------------------
@@ -413,39 +469,8 @@ end
 ---------------------------------------
 function ATW.EnemyCount(customRange)
 	local range = customRange or AutoTurtleWarrior_Config.WWRange or 8
-	local count = 0
-
-	local numChildren = WorldFrame:GetNumChildren()
-	if not numChildren or numChildren == 0 then
-		return 0
-	end
-
-	local children = { WorldFrame:GetChildren() }
-
-	for i = 1, numChildren do
-		local frame = children[i]
-
-		-- Check if it's a nameplate (visible, no name)
-		if frame and frame:IsVisible() and not frame:GetName() then
-			local frameChildren = { frame:GetChildren() }
-
-			for _, child in ipairs(frameChildren) do
-				if child and child:GetObjectType() == "StatusBar" then
-					local guid = ATW.GetNameplateGUID(frame)
-
-					if guid and UnitCanAttack("player", guid) == 1 then
-						local dist = ATW.GetDistance(guid)
-						if dist and dist <= range then
-							count = count + 1
-						end
-					end
-					break
-				end
-			end
-		end
-	end
-
-	return count
+	local enemies = ATW.GetEnemiesWithTTD and ATW.GetEnemiesWithTTD(range) or {}
+	return table.getn(enemies)
 end
 
 ---------------------------------------
@@ -462,15 +487,28 @@ end
 ---------------------------------------
 function ATW.GetEnemiesWithTTD(maxRange)
 	maxRange = maxRange or 8
-	local enemies = {}
 
 	-- Cleanup expired Rend tracking
 	if ATW.RendTracker then
 		ATW.RendTracker.Cleanup()
 	end
 
+	local cache = ATW.AoECache
+	local now = GetTime()
+	if cache and cache.enemies and cache.scanRange >= maxRange and (now - cache.time) <= (cache.ttl or 0.10) then
+		return FilterEnemiesInRange(cache.enemies, maxRange)
+	end
+
+	local scanRange = math.max(maxRange, 8)
+	local enemies = {}
+
 	local numChildren = WorldFrame:GetNumChildren()
 	if not numChildren or numChildren == 0 then
+		if cache then
+			cache.enemies = enemies
+			cache.scanRange = scanRange
+			cache.time = now
+		end
 		return enemies
 	end
 
@@ -488,7 +526,7 @@ function ATW.GetEnemiesWithTTD(maxRange)
 
 					if guid and UnitCanAttack("player", guid) == 1 then
 						local dist = ATW.GetDistance(guid)
-						if dist and dist <= maxRange then
+						if dist and dist <= scanRange then
 							-- Get TTD for this unit
 							local ttd = 30  -- Default
 							if ATW.GetUnitTTD then
@@ -556,7 +594,13 @@ function ATW.GetEnemiesWithTTD(maxRange)
 		end
 	end
 
-	return enemies
+	if cache then
+		cache.enemies = enemies
+		cache.scanRange = scanRange
+		cache.time = now
+	end
+
+	return FilterEnemiesInRange(enemies, maxRange)
 end
 
 ---------------------------------------

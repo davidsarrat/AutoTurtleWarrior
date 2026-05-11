@@ -3,6 +3,14 @@
 	Slash command handling
 ]]--
 
+local function InvalidateCommandCaches()
+	if ATW.InvalidateDecisionCaches then
+		ATW.InvalidateDecisionCaches()
+	elseif ATW.InvalidateCooldownCache then
+		ATW.InvalidateCooldownCache()
+	end
+end
+
 function ATW.HandleCommand(msg)
 	local cmd = strlower(msg or "")
 
@@ -382,6 +390,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("CD Sync: |cffff9900OFF|r (use cooldowns independently)")
 		end
+		InvalidateCommandCaches()
 
 	elseif strfind(cmd, "^sync%s+") or strfind(cmd, "^cdsync%s+") then
 		-- /atw sync on|off
@@ -396,6 +405,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("Usage: /atw sync [on|off]")
 		end
+		InvalidateCommandCaches()
 
 	elseif cmd == "bloodragecd" or cmd == "brcd" then
 		-- Toggle Bloodrage CD mode (treat as burst cooldown)
@@ -408,6 +418,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("Bloodrage CD: |cffff9900OFF|r (use on CD for rage)")
 		end
+		InvalidateCommandCaches()
 
 	elseif strfind(cmd, "^bloodragecd%s+") or strfind(cmd, "^brcd%s+") then
 		-- /atw bloodragecd on|off
@@ -422,6 +433,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("Usage: /atw bloodragecd [on|off]")
 		end
+		InvalidateCommandCaches()
 
 	elseif cmd == "brcombat" or cmd == "bloodragecombat" then
 		-- Toggle Bloodrage combat-only mode
@@ -434,6 +446,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("Bloodrage Combat: |cffff9900OFF|r (can use out of combat)")
 		end
+		InvalidateCommandCaches()
 
 	elseif strfind(cmd, "^brcombat%s+") or strfind(cmd, "^bloodragecombat%s+") then
 		-- /atw brcombat on|off
@@ -448,6 +461,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("Usage: /atw brcombat [on|off]")
 		end
+		InvalidateCommandCaches()
 
 	elseif cmd == "aoemode" or cmd == "aoetoggle" then
 		-- Toggle AoE mode (auto vs single target)
@@ -460,6 +474,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("AoE Mode: |cffff9900SINGLE TARGET|r (funnel mode)")
 		end
+		InvalidateCommandCaches()
 
 	elseif strfind(cmd, "^aoemode%s+") or strfind(cmd, "^aoetoggle%s+") then
 		-- /atw aoemode on|off
@@ -474,6 +489,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("Usage: /atw aoemode [on|off|auto|st]")
 		end
+		InvalidateCommandCaches()
 
 	elseif cmd == "rendspread" or cmd == "spread" then
 		-- Toggle Rend spreading
@@ -486,6 +502,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("Rend Spread: |cffff9900OFF|r (main target only)")
 		end
+		InvalidateCommandCaches()
 
 	elseif strfind(cmd, "^rendspread%s+") or strfind(cmd, "^spread%s+") then
 		-- /atw rendspread on|off
@@ -500,6 +517,7 @@ function ATW.HandleCommand(msg)
 		else
 			ATW.Print("Usage: /atw rendspread [on|off]")
 		end
+		InvalidateCommandCaches()
 
 	elseif cmd == "casts" or cmd == "casting" then
 		-- Show casting enemies (debug)
@@ -866,6 +884,7 @@ function ATW.HandleCommand(msg)
 					ATW.Engine.Cache.lastState = nil
 					ATW.Engine.Cache.lastResult = nil
 				end
+				InvalidateCommandCaches()
 				ATW.Print("Decision horizon set to |cff00ff00" .. seconds .. "s|r (" .. math.floor(seconds / 1.5) .. " GCDs)")
 			else
 				ATW.Print("|cffff0000Invalid horizon. Range: 3-120 seconds|r")

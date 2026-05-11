@@ -124,3 +124,18 @@ end
 function ATW.ResetTimelinePosition()
 	ATW.Print("UI timeline is disabled in this build.")
 end
+
+---------------------------------------
+-- Shared Decision Cache Invalidation
+---------------------------------------
+function ATW.InvalidateDecisionCaches()
+	if ATW.InvalidateAoECache then
+		ATW.InvalidateAoECache()
+	end
+
+	if ATW.InvalidateCooldownCache then
+		ATW.InvalidateCooldownCache()
+	elseif ATW.Engine and ATW.Engine.InvalidateCache then
+		ATW.Engine.InvalidateCache()
+	end
+end

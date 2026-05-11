@@ -319,6 +319,9 @@ function ATW.SetPummel(enabled)
 	else
 		ATW.Print("Auto-Interrupt: |cffff0000OFF|r")
 	end
+	if ATW.InvalidateDecisionCaches then
+		ATW.InvalidateDecisionCaches()
+	end
 end
 
 function ATW.TogglePummel()
