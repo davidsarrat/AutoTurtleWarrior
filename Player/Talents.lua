@@ -49,13 +49,14 @@ ATW.RendData = {
 }
 
 -- Execute: base damage + (rage * coefficient)
--- Formula: baseDmg + (usedRage * coeff)
+-- Current TurtleWoW reverted Execute back to vanilla values and removed the
+-- short cooldown. Improved Execute reduces rage cost again.
 ATW.ExecuteData = {
 	-- [rank] = { base, coeff, level }
-	[1] = { base = 75,  coeff = 4,  level = 24 },
-	[2] = { base = 150, coeff = 8,  level = 32 },
-	[3] = { base = 225, coeff = 12, level = 40 },
-	[4] = { base = 300, coeff = 16, level = 48 },
+	[1] = { base = 125, coeff = 3,  level = 24 },
+	[2] = { base = 200, coeff = 6,  level = 32 },
+	[3] = { base = 325, coeff = 9,  level = 40 },
+	[4] = { base = 450, coeff = 12, level = 48 },
 	[5] = { base = 600, coeff = 15, level = 56 },
 }
 
@@ -446,9 +447,9 @@ function ATW.LoadTalents()
 	ATW.Talents.ImpRend = r  -- 0/1/2 points in TurtleWoW
 
 	-- Improved Charge (Arms tier 2, slot 2)
-	-- +3/6 rage on Charge
+	-- TurtleWoW: +5/10 rage on Charge
 	_, _, _, _, r = GetTalentInfo(1, 4)
-	ATW.Talents.ChargeRage = 9 + (r * 3)  -- Base 9 + talent
+	ATW.Talents.ChargeRage = 9 + (r * 5)  -- Base 9 + talent
 
 	-- Tactical Mastery (Arms tier 3, slot 1)
 	-- Retain 5/10/15/20/25 rage when switching stances
@@ -466,15 +467,21 @@ function ATW.LoadTalents()
 	ATW.Talents.AngerManagement = r > 0
 
 	-- Deep Wounds (Arms tier 6, slot 1)
-	-- Causes 20/40/60% weapon damage over 12s on crit
+	-- TurtleWoW: 20/40/60% weapon damage over 6s, ticking every 1.5s
 	_, _, _, _, r = GetTalentInfo(1, 11)
 	ATW.Talents.DeepWounds = r  -- 0/1/2/3 points
 
-	-- Two-Handed Weapon Specialization (Arms tier 4)
-	-- +1/2/3/4/5% damage with 2H weapons
-	-- Note: Slot may need verification for TurtleWoW tree
-	_, _, _, _, r = GetTalentInfo(1, 7)
-	ATW.Talents.TwoHandSpec = r  -- 0-5 points
+	-- Two-Handed Weapon Specialization
+	-- TurtleWoW: 3 points, +2/4/6% damage with 2H weapons.
+	-- Scan by name because the tree was shuffled in CC2.
+	ATW.Talents.TwoHandSpec = 0
+	for i = 1, 30 do
+		local name, _, _, _, rank = GetTalentInfo(1, i)
+		if name and string.find(name, "Two") and string.find(name, "Handed") and string.find(name, "Weapon Specialization") then
+			ATW.Talents.TwoHandSpec = rank or 0
+			break
+		end
+	end
 
 	-- Impale (Arms tier 6, slot 2)
 	-- +10/20% crit damage on abilities
@@ -517,17 +524,29 @@ function ATW.LoadTalents()
 	ATW.Talents.Cruelty = r  -- 0-5% crit
 
 	-- Unbridled Wrath (Fury tier 2, slot 3)
-	-- 8/16/24/32/40% chance for +1 rage on hit (2H gets +2 in TurtleWoW)
+	-- TurtleWoW: 15/30/45/60/75% chance for +1 rage on hit (2H gets +2)
 	_, _, _, _, r = GetTalentInfo(2, 5)
-	ATW.Talents.UnbridledWrath = r * 8  -- Percentage chance
+	ATW.Talents.UnbridledWrath = r * 15  -- Percentage chance
 
-	-- Reckless Execute (Fury tier 5, slot 2) - REPLACED Improved Execute in 1.17.2
-	-- Reduces Execute cooldown by 2/4 seconds (2 points removes CD entirely)
-	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
-	-- Note: Base Execute cost is 15 rage (no longer modified by talent)
-	_, _, _, _, r = GetTalentInfo(2, 10)
-	ATW.Talents.RecklessExecute = r  -- 0-2 points
-	ATW.Talents.ExecCost = 15  -- Fixed cost in 1.17.2
+	-- Improved Execute
+	-- TurtleWoW later reverted Execute cooldown behavior back to vanilla:
+	-- no Execute CD, and this talent reduces rage cost by 2/5 again.
+	ATW.Talents.ImprovedExecute = 0
+	for i = 1, 30 do
+		local name, _, _, _, rank = GetTalentInfo(2, i)
+		if name and (string.find(name, "Improved Execute") or string.find(name, "Reckless Execute")) then
+			ATW.Talents.ImprovedExecute = rank or 0
+			break
+		end
+	end
+	ATW.Talents.RecklessExecute = 0  -- Legacy key; cooldown reduction is no longer current.
+	if ATW.Talents.ImprovedExecute >= 2 then
+		ATW.Talents.ExecCost = 10
+	elseif ATW.Talents.ImprovedExecute == 1 then
+		ATW.Talents.ExecCost = 13
+	else
+		ATW.Talents.ExecCost = 15
+	end
 
 	-- Enrage / Wrecking Crew (Fury tier 5, slot 3)
 	-- On crit, +5/10/15/20/25% damage for 12s
@@ -581,13 +600,13 @@ function ATW.LoadTalents()
 	-- ARMS TREE (continued)
 	---------------------------------------
 
-	-- Master of Arms (Arms tier 9, 5 points) - NEW in 1.17.2
+	-- Master of Arms (Arms, 5 points) - TurtleWoW
 	-- Replaces weapon-specific specializations
 	-- Effect varies by equipped weapon type:
 	-- - Axe: +1/2/3/4/5% crit
 	-- - Mace: +4/8/12/16/20% armor penetration
-	-- - Sword: +2/4/6/8/10% chance for extra attack
-	-- - Polearm: +1 yard range per point
+	-- - Sword: +1/2/3/4/5% chance for extra attack after hit
+	-- - Polearm: +0.4/0.8/1.2/1.6/2.0 yard range
 	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
 	-- Index unknown - scan by name
 	ATW.Talents.MasterOfArms = 0
@@ -617,7 +636,7 @@ function ATW.LoadTalents()
 		ATW.Print("  BT: " .. (ATW.Talents.HasBT and "Yes" or "No") .. " | MS: " .. (ATW.Talents.HasMS and "Yes" or "No"))
 		ATW.Print("  AM: " .. (ATW.Talents.AngerManagement and "Yes" or "No"))
 		ATW.Print("  Master of Arms: " .. (ATW.Talents.MasterOfArms or 0) .. " points")
-		ATW.Print("  Reckless Execute: " .. (ATW.Talents.RecklessExecute or 0) .. " points")
+		ATW.Print("  Improved Execute: " .. (ATW.Talents.ImprovedExecute or 0) .. " points")
 		ATW.Print("  Improved Whirlwind: " .. (ATW.Talents.ImprovedWhirlwind or 0) .. " points")
 		ATW.Print("  Dual Wield Spec: " .. (ATW.Talents.DualWieldSpec or 0) .. " points")
 		ATW.Print("  Improved Battle Shout: " .. (ATW.Talents.ImprovedBattleShout or 0) .. " points")

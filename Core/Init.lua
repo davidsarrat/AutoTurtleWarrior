@@ -17,6 +17,7 @@ ATW.DEFAULT = {
 	PrimaryStance = 0,  -- 0 = auto-detect (Berserker if available, else Battle)
 	DanceRage = 10,
 	MaxRage = 60,
+	DecisionHorizon = 9000,  -- 9s tactical horizon keeps live decisions responsive
 	AoE = "auto",
 	AoECount = 3,
 	WWRange = 8,

@@ -53,9 +53,9 @@ Engine.RAGE_HIT_FACTOR = 7.5
 Engine.RAGE_DODGE_FACTOR = 0.75  -- Dodge generates 75% of normal rage
 Engine.RAGE_OH_PENALTY = 0.5  -- OH generates 50% rage (not in Zebouski but vanilla)
 
--- Unbridled Wrath: 8/16/24/32/40% chance per hit for 1 rage (2 if 2H in Turtle)
+-- Unbridled Wrath: TurtleWoW 15/30/45/60/75% chance per hit for 1 rage (2 if 2H)
 -- This is loaded from talents, default is 0 (no talent)
-Engine.UNBRIDLED_WRATH_CHANCE = 40  -- Fallback if not loaded from talents
+Engine.UNBRIDLED_WRATH_CHANCE = 75  -- Fallback if not loaded from talents
 
 -- GCD in milliseconds
 Engine.GCD = 1500
@@ -114,9 +114,10 @@ Engine.BATTLE_SHOUT_AP = 232   -- Fallback: Rank 7
 -- Use ATW.GetRendTickDamage(), ATW.GetRendTicks(), ATW.GetRendDuration()
 Engine.REND_AP_COEFF = 0.05  -- Per tick (constant across ranks)
 
--- Deep Wounds: 60% weapon damage over 12s (4 ticks = 15% per tick)
+-- Deep Wounds: 60% weapon damage over 6s (4 ticks every 1.5s in TurtleWoW)
 Engine.DW_PERCENT = 0.60
 Engine.DW_TICKS = 4
+Engine.DW_TICK_INTERVAL = 1500
 
 -- Buff durations (milliseconds)
 Engine.BUFF_DURATIONS = {
@@ -128,7 +129,7 @@ Engine.BUFF_DURATIONS = {
 	BerserkerRage = 10000,  -- 10s
 	Bloodrage = 10000,      -- 10s (generates rage over time)
 	SweepingStrikes = 0,    -- 5 charges
-	DeepWounds = 12000,     -- 12s DoT
+	DeepWounds = 6000,      -- 6s DoT
 	Rend = 21000,           -- Default 21s DoT (actual duration from ATW.GetRendDuration())
 	-- Racial abilities (TurtleWoW values)
 	BloodFury = 15000,      -- 15s (Orc)
@@ -572,8 +573,7 @@ function Engine.GetDamageMod(state)
 		end
 	end
 
-	-- Master of Arms (Mace): +4/8/12/16/20% armor penetration (TurtleWoW 1.17.2)
-	-- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
+	-- Master of Arms (Mace): ignore 2/4/6/8/10 armor per player level
 	-- Formula: ArmorReduction = Armor / (Armor + 400 + 85*Level)
 	-- Against level 63 bosses (~3730 armor):
 	--   Without pen: 3730 / 8485 = 43.9% reduction
@@ -582,7 +582,8 @@ function Engine.GetDamageMod(state)
 	-- Approximation: 20% armor pen ≈ 9.4% damage increase vs raid bosses
 	-- Per point: ~0.47% damage increase per 1% armor pen
 	if ATW.Gear and ATW.Gear.weaponType == "Mace" and ATW.Talents and ATW.Talents.MasterOfArms and ATW.Talents.MasterOfArms > 0 then
-		local armorPenPercent = ATW.Talents.MasterOfArms * 4  -- 4/8/12/16/20%
+		local playerLevel = UnitLevel and UnitLevel("player") or 60
+		local ignoredArmor = ATW.Talents.MasterOfArms * 2 * playerLevel
 
 		-- Calculate damage increase based on boss armor
 		-- Simplified formula for level 63 bosses (3730 armor baseline)
@@ -592,9 +593,8 @@ function Engine.GetDamageMod(state)
 		-- Reduction without armor pen
 		local baseReduction = bossArmor / (bossArmor + armorConstant)
 
-		-- Reduction with armor pen (ignore X% of armor)
-		local ignoredArmor = bossArmor * (armorPenPercent / 100)
-		local effectiveArmor = bossArmor - ignoredArmor
+		-- Reduction with flat armor ignored
+		local effectiveArmor = math.max(0, bossArmor - ignoredArmor)
 		local penReduction = effectiveArmor / (effectiveArmor + armorConstant)
 
 		-- Damage increase = (1 - newReduction) / (1 - oldReduction)
@@ -602,11 +602,9 @@ function Engine.GetDamageMod(state)
 		mod = mod * damageMultiplier
 	end
 
-	-- Two-Handed Weapon Specialization (Arms talent, 5 points)
-	-- +1/2/3/4/5% damage with 2H weapons
-	-- Source: Vanilla WoW Arms tree
+	-- Two-Handed Weapon Specialization: TurtleWoW 3 points, +2/4/6% damage
 	if ATW.Gear and ATW.Gear.is2H and ATW.Talents and ATW.Talents.TwoHandSpec and ATW.Talents.TwoHandSpec > 0 then
-		local bonus = ATW.Talents.TwoHandSpec  -- 1-5%
+		local bonus = ATW.Talents.TwoHandSpec * 2
 		mod = mod * (1 + bonus / 100)
 	end
 
@@ -804,9 +802,9 @@ end
 -- Apply Deep Wounds DoT
 ---------------------------------------
 function Engine.ApplyDeepWounds(state, weaponDamage)
-	-- Deep Wounds: 60% of weapon damage over 12 seconds (4 ticks)
+	-- Deep Wounds: 60% of weapon damage over 6 seconds (4 ticks)
 	local totalDmg = weaponDamage * 0.60
-	local tickDamage = totalDmg / 4
+	local tickDamage = totalDmg / Engine.DW_TICKS
 
 	-- Apply to main target
 	if not state.dots.deepwounds then
@@ -815,9 +813,9 @@ function Engine.ApplyDeepWounds(state, weaponDamage)
 
 	state.dots.deepwounds["target"] = {
 		endTime = state.time + Engine.BUFF_DURATIONS.DeepWounds,
-		nextTick = state.time + 3000,
+		nextTick = state.time + Engine.DW_TICK_INTERVAL,
 		tickDamage = tickDamage,
-		tickInterval = 3000,
+		tickInterval = Engine.DW_TICK_INTERVAL,
 	}
 end
 
@@ -1388,12 +1386,10 @@ function Engine.ProcessAutoAttack(state, isOH)
 		finalDamage = finalDamage + hojDamage
 	end
 
-	-- Master of Arms (Sword): Extra attack proc (TurtleWoW 1.17.2)
-	-- 2/4/6/8/10% chance for extra attack based on talent points
-	-- Only procs on MH swings, not OH
-	if not isOH and wasCrit then  -- Only on MH crits (like Sword Spec in retail)
+	-- Master of Arms (Sword): 1/2/3/4/5% chance for an extra attack after MH hits.
+	if not isOH then
 		if ATW.Gear and ATW.Gear.weaponType == "Sword" and ATW.Talents and ATW.Talents.MasterOfArms and ATW.Talents.MasterOfArms > 0 then
-			local procChance = ATW.Talents.MasterOfArms * 2  -- 2/4/6/8/10%
+			local procChance = ATW.Talents.MasterOfArms
 			local roll = math.random() * 100
 			if roll < procChance then
 				-- Extra MH attack
@@ -1861,9 +1857,9 @@ end
 
 -- Configuration
 -- Decision horizon: how far ahead to simulate (in milliseconds)
--- Default: 30 seconds (20 GCDs) - configurable via /atw horizon <seconds>
-Engine.TACTICAL_HORIZON = 30000  -- 30 seconds for tactical decisions
-Engine.DECISION_HORIZON = 30000  -- Alias for backwards compatibility
+-- Default: 9 seconds (6 GCDs) - enough for tactical choices without live lag
+Engine.TACTICAL_HORIZON = 9000
+Engine.DECISION_HORIZON = 9000  -- Alias for backwards compatibility
 Engine.DECISION_GCD = 1500       -- 1.5s GCD
 
 -- Get configured horizon (from config or default)
@@ -2372,6 +2368,18 @@ function Engine.CaptureCurrentState()
 		state.enemyCountWW = state.enemyCountWW + 1
 	end
 
+	if state.enemies and table.getn(state.enemies) > 1 then
+		table.sort(state.enemies, function(a, b)
+			if a.isTarget ~= b.isTarget then
+				return a.isTarget
+			end
+			if (a.hasRend or false) ~= (b.hasRend or false) then
+				return not a.hasRend
+			end
+			return (a.ttd or 0) > (b.ttd or 0)
+		end)
+	end
+
 	-- SINGLE TARGET MODE: Force enemy counts to 1 for AoE ability decisions
 	-- This makes WW/Cleave behave as single-target (lower priority)
 	if not aoeEnabled then
@@ -2593,7 +2601,7 @@ function Engine.GetValidActions(state)
 	-- Available in both stances - simulator picks based on crit bonus
 	---------------------------------------
 	if inExecute and hasSpell("Execute") and (stance == 1 or stance == 3) and canMelee() then
-		local execCost = ATW.Talents and ATW.Talents.ExecCost or 15
+		local execCost = ATW.GetRageCost and ATW.GetRageCost("Execute") or 15
 		if rage >= execCost then
 			table.insert(actions, {name = "Execute", rage = execCost})
 		end
@@ -2679,7 +2687,9 @@ function Engine.GetValidActions(state)
 	-- CONSERVATIVE: Require 12s TTD for meaningful tick value
 	---------------------------------------
 	local rendCost = 10
-	local MIN_REND_TTD = 12000  -- 12s = 4 ticks minimum
+	local MIN_REND_TTD = 9000  -- 9s = 3 ticks minimum; TurtleWoW Rend AP scaling is strong
+	local MAX_REND_SPREAD_CANDIDATES = 4
+	local rendCandidates = 0
 
 	if not gcdActive and hasSpell("Rend") and (stance == 1 or stance == 2) and rage >= rendCost and canMelee() then
 		-- Multi-target Rend spread (already checks enemy.distance <= 5)
@@ -2696,6 +2706,10 @@ function Engine.GetValidActions(state)
 								targetHP = enemy.hpPercent,
 								isMainTarget = enemy.isTarget,
 							})
+							rendCandidates = rendCandidates + 1
+							if rendCandidates >= MAX_REND_SPREAD_CANDIDATES then
+								break
+							end
 						end
 					end
 				end
@@ -2891,7 +2905,7 @@ function Engine.GetValidActions(state)
 	local numMeleeTargets = state.enemyCountMelee or 1
 	if hasSpell("SweepingStrikes") and numMeleeTargets >= 2 and stance == 1 then
 		local ssReady = (state.cooldowns.SweepingStrikes or 0) <= 0
-		local ssCost = 30
+		local ssCost = 20
 		if ssReady and not state.hasSweepingStrikes and rage >= ssCost then
 			table.insert(actions, {name = "SweepingStrikes", rage = ssCost})
 		end
@@ -2964,7 +2978,7 @@ function Engine.GetActionDamage(state, action)
 		local base = ATW.GetExecuteBase and ATW.GetExecuteBase() or 600
 		local coeff = ATW.GetExecuteCoeff and ATW.GetExecuteCoeff() or 15
 		local availableRage = state.rage
-		local execCost = 15  -- Fixed 15 rage in TurtleWoW 1.17.2
+		local execCost = ATW.GetRageCost and ATW.GetRageCost("Execute") or 15
 		local excess = math.max(0, availableRage - execCost)
 		damage = base + (excess * coeff)
 
@@ -2989,13 +3003,13 @@ function Engine.GetActionDamage(state, action)
 		damage = weaponDmg + bonus
 		-- Overpower has +25/50% crit from Improved Overpower talent
 		-- This is ON TOP of the stance crit bonus
-		local opCritBonus = ATW.Talents and ATW.Talents.OPCrit or 0
+		local opCritBonus = ATW.Talents and ATW.Talents.ImpOP or 0
 		-- Overpower uses Battle Stance (no stance crit bonus)
 		local opCrit = baseCrit + opCritBonus  -- No berserker bonus since it's Battle stance
 		critExpectedMult = 1 + (opCrit / 100) * (critMultiplier - 1)
 
 	elseif action.name == "Slam" then
-		-- Slam: weapon damage + bonus, resets swing timer
+		-- Slam: weapon damage + bonus; TurtleWoW pauses the swing timer
 		local bonus = ATW.GetSlamBonus and ATW.GetSlamBonus() or 87
 		local weaponDmg = (state.mhDmgMin + state.mhDmgMax) / 2
 		damage = weaponDmg + bonus
@@ -3036,10 +3050,12 @@ function Engine.GetActionDamage(state, action)
 
 		-- Use target-specific TTD if this is a multi-target Rend action
 		local targetTTD = action.targetTTD or state.targetTTD or 30000
+		local remainingTTD = targetTTD - (state.time or 0)
+		if remainingTTD < 0 then remainingTTD = 0 end
 		local tickInterval = 3000  -- 3 seconds per tick
-		local ticksFromTTD = math.floor(targetTTD / tickInterval)
+		local ticksFromTTD = math.floor(remainingTTD / tickInterval)
 		local numTicks = math.min(maxTicks, ticksFromTTD)
-		if numTicks < 1 then numTicks = 1 end
+		if numTicks < 0 then numTicks = 0 end
 
 		damage = tickTotal * numTicks
 
@@ -3180,16 +3196,16 @@ function Engine.GetActionDamage(state, action)
 	if state.buffs.DeathWish or state.hasDeathWish then dmgMod = dmgMod * 1.20 end
 	-- Recklessness doesn't increase damage directly, it increases crit
 
-	-- Two-Handed Weapon Specialization: +1/2/3/4/5% damage with 2H weapons
-	if not state.hasOffHand then  -- No offhand = using 2H weapon
+	-- Two-Handed Weapon Specialization: TurtleWoW 3 points, +2/4/6% with 2H
+	if not state.hasOH then
 		local twoHandSpec = ATW.Talents and ATW.Talents.TwoHandSpec or 0
 		if twoHandSpec > 0 then
-			dmgMod = dmgMod * (1 + twoHandSpec * 0.01)  -- +1% per point
+			dmgMod = dmgMod * (1 + twoHandSpec * 0.02)
 		end
 	end
 
 	-- Defensive Stance: -10% damage dealt
-	if stanceAfterAction == 2 then
+	if state.stance == 2 then
 		dmgMod = dmgMod * 0.90
 	end
 
@@ -3248,7 +3264,7 @@ function Engine.ApplyAction(state, action)
 	if action.name == "Execute" then
 		-- Execute consumes ALL rage (base cost already paid above)
 		-- The excess rage was converted to damage in GetActionDamage
-		-- TurtleWoW 1.17.2: Base CD 5.5s, reduced by Reckless Execute talent
+		-- TurtleWoW current: no Execute cooldown; Improved Execute reduces cost
 		newState.rage = 0
 		newState.inCombat = true
 
@@ -3273,9 +3289,8 @@ function Engine.ApplyAction(state, action)
 		newState.inCombat = true
 
 	elseif action.name == "Slam" then
-		-- Slam resets swing timer (penalty for using it)
-		-- No cooldown, but costs a GCD and delays next auto
-		newState.mhTimer = newState.mhSpeed  -- Reset MH swing timer
+		-- TurtleWoW Slam pauses the weapon swing timer instead of resetting it.
+		-- This tactical model advances time by the GCD without wiping swing progress.
 		newState.inCombat = true
 
 	elseif action.name == "Charge" then
@@ -3360,6 +3375,7 @@ function Engine.ApplyAction(state, action)
 		newState.cooldowns.SweepingStrikes = 30000  -- 30s CD
 		newState.hasSweepingStrikes = true
 		newState.sweepingCharges = 5  -- 5 charges
+		newState.inCombat = true
 
 	elseif action.name == "Pummel" then
 		newState.cooldowns.Pummel = 10000  -- 10s CD

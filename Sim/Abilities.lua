@@ -74,15 +74,15 @@ Abilities.Whirlwind = {
 
 Abilities.Execute = {
 	name = "Execute",
-	rage = 15,  -- Fixed 15 rage in 1.17.2 (no talent reduction)
-	cd = 5.5,   -- TurtleWoW 1.17.2: 5.5s base, reduced by Reckless Execute talent
+	rage = 15,  -- Base, reduced by Improved Execute
+	cd = 0,     -- TurtleWoW reverted Execute cooldown back to vanilla
 	stance = {1, 3},  -- Battle or Berserker
 	gcd = true,
 	isCooldown = false,
 	damage = function(stats, rageAvailable)
 		-- TurtleWoW: base + (excessRage * coeff)
 		-- Values depend on spell rank
-		local cost = 15  -- Fixed cost
+		local cost = ATW.GetRageCost and ATW.GetRageCost("Execute") or 15
 		local excess = (rageAvailable or 30) - cost
 		if excess < 0 then excess = 0 end
 		local base = ATW.GetExecuteBase and ATW.GetExecuteBase() or 600
@@ -322,7 +322,7 @@ Abilities.BattleShout = {
 
 Abilities.SweepingStrikes = {
 	name = "Sweeping Strikes",
-	rage = 30,
+	rage = 20,
 	cd = 30,
 	stance = {1},  -- Battle only
 	gcd = true,
@@ -456,7 +456,7 @@ Abilities.Rend = {
 
 Abilities.SunderArmor = {
 	name = "Sunder Armor",
-	rage = 15,
+	rage = 10,
 	cd = 0,
 	stance = {1, 2},  -- Battle and Defensive
 	gcd = true,
@@ -595,10 +595,9 @@ end
 
 ---------------------------------------
 -- Get ability cooldown accounting for talents
--- TurtleWoW 1.17.2 changes:
+-- TurtleWoW changes:
 -- - Improved Whirlwind reduces WW CD
--- - Reckless Execute reduces Execute CD
--- Source: https://turtle-wow.fandom.com/wiki/Patch_1.17.2
+-- - Execute currently has no cooldown
 ---------------------------------------
 function ATW.GetAbilityCooldown(abilityName)
 	local ability = Abilities[abilityName]
@@ -619,19 +618,7 @@ function ATW.GetAbilityCooldown(abilityName)
 		return baseCd - reduction
 
 	elseif abilityName == "Execute" then
-		local baseCd = 5.5  -- TurtleWoW 1.17.2: 5.5s base CD
-		local reduction = 0
-		if ATW.Talents and ATW.Talents.RecklessExecute then
-			-- Reckless Execute: -2/-4 seconds (2 points = no CD)
-			-- Points: 0-2, Reduction: 0/2/4
-			local points = ATW.Talents.RecklessExecute
-			if points == 1 then reduction = 2
-			elseif points >= 2 then reduction = 4
-			end
-		end
-		local finalCD = baseCd - reduction
-		if finalCD < 0 then finalCD = 0 end  -- 2 points removes CD entirely
-		return finalCD
+		return 0
 	end
 
 	return ability.cd or 0
