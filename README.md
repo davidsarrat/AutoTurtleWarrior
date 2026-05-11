@@ -42,15 +42,25 @@ Provides extended unit information functions.
 /atw status   - Check addon dependencies
 ```
 
+This build intentionally creates no visual UI frames. Bind `/atw` directly for the rotation.
+
 ### Toggle Commands
 
 ```
 /atw burst    - Toggle Death Wish + Racials
 /atw reckless - Toggle Recklessness
 /atw sync     - Sync racials with Death Wish
-/atw aoe      - Toggle AoE mode
+/atw aoemode  - Toggle AoE/single-target mode
+/atw rendspread - Toggle multi-target Rend spreading
 /atw pummel   - Toggle auto-interrupt
 /atw brcombat - Toggle Bloodrage combat-only mode
+```
+
+### Debug Commands
+
+```
+/atw aoe      - Show AoE and Rend-spread analysis
+/atw rend     - Show Rend decision and tracker state
 ```
 
 ### Simulation Settings
@@ -60,12 +70,12 @@ Provides extended unit information functions.
 /atw horizon <sec>  - Set tactical horizon (3-120 seconds)
 ```
 
-The tactical horizon determines how far ahead the simulator looks when comparing actions. Longer horizons consider more future GCDs but may be less responsive to immediate changes.
+The tactical horizon defaults to 9 seconds. Longer horizons consider more future GCDs but may be less responsive to immediate changes.
 
 ## Features
 
 - Simulation-based decision making (no hardcoded priorities)
-- Configurable tactical horizon
+- Configurable tactical horizon (9s default)
 - Stance dancing with Tactical Mastery support
 - Multi-target Rend tracking via GUID
 - Time-to-Die (TTD) calculation via linear regression
